@@ -134,6 +134,36 @@
   outline-offset: 1px;
 }
 
+.filter-chatid {
+  display: flex;
+}
+
+.filter-chatid label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+  width: 100%;
+}
+
+.filter-chatid input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color-scheme: dark;
+  width: 100%;
+}
+
+.filter-chatid input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .toggle-switch-wrapper {
   align-self: flex-start;
 }

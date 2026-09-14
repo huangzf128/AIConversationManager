@@ -42,6 +42,7 @@ function MyPage() {
   const [platformFilter, setPlatformFilter] = useState<Set<string>>(new Set());
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [chatIdSearch, setChatIdSearch] = useState('');
   const [showHidden, setShowHidden] = useState(false);
 
   useEffect(() => {
@@ -77,9 +78,10 @@ function MyPage() {
       if (platformFilter.size > 0 && !platformFilter.has(c.platform)) return false;
       if (dateFrom && c.updatedAt < dateFrom) return false;
       if (dateTo && c.updatedAt > `${dateTo}T23:59:59.999Z`) return false;
+      if (chatIdSearch && !c.id.toLowerCase().includes(chatIdSearch.toLowerCase())) return false;
       return true;
     });
-  }, [conversations, platformFilter, dateFrom, dateTo, showHidden]);
+  }, [conversations, platformFilter, dateFrom, dateTo, chatIdSearch, showHidden]);
 
   const togglePlatform = (platform: string) => {
     setPlatformFilter((prev) => {
@@ -154,6 +156,8 @@ function MyPage() {
         dateTo={dateTo}
         onDateFromChange={setDateFrom}
         onDateToChange={setDateTo}
+        chatIdSearch={chatIdSearch}
+        onChatIdSearchChange={setChatIdSearch}
         showHidden={showHidden}
         onToggleShowHidden={() => setShowHidden((prev) => !prev)}
         selectedId={selectedId}

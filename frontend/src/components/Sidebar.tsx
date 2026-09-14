@@ -13,6 +13,8 @@ interface SidebarProps {
   dateTo: string;
   onDateFromChange: (value: string) => void;
   onDateToChange: (value: string) => void;
+  chatIdSearch: string;
+  onChatIdSearchChange: (value: string) => void;
   showHidden: boolean;
   onToggleShowHidden: () => void;
   selectedId: string | null;
@@ -33,6 +35,8 @@ function Sidebar({
   dateTo,
   onDateFromChange,
   onDateToChange,
+  chatIdSearch,
+  onChatIdSearchChange,
   showHidden,
   onToggleShowHidden,
   selectedId,
@@ -72,6 +76,18 @@ function Sidebar({
           <label>
             To
             <input type="date" value={dateTo} onChange={(e) => onDateToChange(e.target.value)} />
+          </label>
+        </div>
+
+        <div className="filter-chatid">
+          <label>
+            Search by Chat ID
+            <input 
+              type="text" 
+              value={chatIdSearch} 
+              onChange={(e) => onChatIdSearchChange(e.target.value)}
+              placeholder="Enter chat ID to search..."
+            />
           </label>
         </div>
 
