@@ -40,8 +40,8 @@ AIConversationManager/
 ## Getting Started
 
 ### Prerequisites
-- Node.js 18+
-- npm or yarn
+- Node.js ^22.22.3 || ^24.15.0 || >=26.0.0
+- npm
 
 ### Installation
 
@@ -51,17 +51,22 @@ cd backend
 npm install
 ```
 
-2. **Setup database**
+2. **Generate Prisma client**
+```bash
+npx prisma generate
+```
+
+3. **Setup database (apply migrations)**
 ```bash
 npx prisma migrate dev
 ```
 
-3. **Start backend server**
+4. **Start backend server**
 ```bash
 npm run start:dev
 ```
 
-4. **Install frontend dependencies and start**
+5. **Install frontend dependencies and start**
 ```bash
 cd ../frontend
 npm install
