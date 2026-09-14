@@ -1,6 +1,6 @@
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { PrismaClient } from '../generated/prisma/client.js';
-import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3';
+import { PrismaLibSql } from "@prisma/adapter-libsql";
 
 // Prisma 7's Rust-free client no longer bundles a built-in SQLite engine,
 // so an explicit driver adapter is required even for local SQLite files.
@@ -9,9 +9,7 @@ import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3';
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
   constructor() {
-    const adapter = new PrismaBetterSqlite3({
-      url: process.env.DATABASE_URL ?? 'file:./dev.db',
-    });
+	const adapter = new PrismaLibSql({ url: "file:./dev.db" });
     super({ adapter });
   }
 
