@@ -1,0 +1,65 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap');
+
+/* Vite's default template ships `#root { max-width: 1280px; margin: 0 auto;
+   text-align: center; }`, which boxes the whole app into a centered column
+   instead of letting the sidebar stay pinned and the content area stretch.
+   Neutralize that here so this page actually fills the viewport. */
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  max-width: none;
+  text-align: left;
+}
+
+.my-page {
+  --bg: #12151b;
+  --surface: #181c24;
+  --surface-raised: #1f2430;
+  --border: #262b36;
+  --text: #e8e6df;
+  --text-muted: #8a8f9c;
+  --accent: #4fb6a6;
+  --accent-soft: rgba(79, 182, 166, 0.14);
+
+  /* Each source platform's own brand hue, used only as a small identity
+     dot/tag — informational, not a page-wide accent. */
+  --platform-gemini: #7b6cff;
+  --platform-chatgpt: #3fbf8f;
+  --platform-claude: #d97757;
+  --platform-deepseek: #2f6fed;
+
+  /* Sans for UI chrome, mono for technical metadata (timestamps, counts),
+     serif for the actual long-form reading content. */
+  --font-ui: 'IBM Plex Sans', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', 'SFMono-Regular', monospace;
+  --font-read: 'Source Serif 4', Georgia, serif;
+
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  height: 100vh;
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  text-align: left;
+}
+
+@media (max-width: 720px) {
+  .my-page {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+    height: auto;
+    min-height: 100vh;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .my-page * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

@@ -1,0 +1,292 @@
+.main-content {
+  overflow-y: auto;
+  padding: 40px 48px;
+  animation: content-fade 180ms ease;
+}
+
+@keyframes content-fade {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.main-content-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.thread-header {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-bottom: 20px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid var(--border);
+}
+
+.thread-header-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.thread-header h1 {
+  font-family: var(--font-ui);
+  font-size: 19px;
+  font-weight: 600;
+  margin: 0;
+  max-width: 60ch;
+}
+
+.thread-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.thread-header-actions button {
+  font-family: var(--font-ui);
+  font-size: 12px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease, background-color 120ms ease;
+}
+
+.thread-header-actions button:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.thread-header-actions button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.hidden-badge {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--text-muted);
+  color: var(--text-muted);
+}
+
+.empty-state {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.platform-tag {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+.platform-tag-gemini { border-color: var(--platform-gemini); color: var(--platform-gemini); }
+.platform-tag-chatgpt { border-color: var(--platform-chatgpt); color: var(--platform-chatgpt); }
+.platform-tag-claude { border-color: var(--platform-claude); color: var(--platform-claude); }
+.platform-tag-deepseek { border-color: var(--platform-deepseek); color: var(--platform-deepseek); }
+
+.thread {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 76ch;
+}
+
+.thread-message {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  border-radius: 0 8px 8px 0;
+  border-left: 2px solid var(--border);
+}
+
+/* Background distinguishes who's speaking, without turning into the generic
+   rounded-card-with-shadow chat-bubble look. */
+.role-user {
+  background: rgba(79, 182, 166, 0.07);
+  border-left-color: var(--accent);
+}
+
+.role-assistant {
+  background: var(--surface-raised);
+}
+
+.message-hidden {
+  opacity: 0.5;
+}
+
+.message-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.message-meta-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.message-meta-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.message-meta .icon-button {
+  margin-left: auto;
+}
+
+.icon-chevron {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  transition: transform 150ms ease;
+}
+
+.icon-chevron-open {
+  transform: rotate(180deg);
+}
+
+.icon-button {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.icon-button:hover {
+  background: var(--surface-raised);
+  color: var(--text);
+}
+
+.icon-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.role-user .message-role {
+  color: var(--accent);
+}
+
+.message-text {
+  font-family: var(--font-read);
+  font-size: 16px;
+  line-height: 1.6;
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+/* Normalizes raw HTML pasted in from a platform export so it reads
+   consistently in the dark theme, regardless of what inline styling
+   (or lack of it) the original export shipped with. */
+.assistant-html {
+  font-family: var(--font-read);
+  font-size: 16px;
+  line-height: 1.65;
+  color: var(--text);
+}
+
+.assistant-html p {
+  margin: 0 0 14px;
+}
+
+.assistant-html p:last-child {
+  margin-bottom: 0;
+}
+
+.assistant-html a {
+  color: var(--accent);
+}
+
+.assistant-html strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.assistant-html ul,
+.assistant-html ol {
+  margin: 0 0 14px;
+  padding-left: 22px;
+}
+
+.assistant-html li {
+  margin-bottom: 6px;
+}
+
+.assistant-html code {
+  font-family: var(--font-mono);
+  background: var(--surface);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+.assistant-html pre {
+  font-family: var(--font-mono);
+  background: var(--surface);
+  padding: 12px 14px;
+  border-radius: 6px;
+  overflow-x: auto;
+}
+
+.assistant-html hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 20px 0;
+}
+
+.assistant-html h1,
+.assistant-html h2 {
+  font-family: var(--font-ui);
+  font-weight: 600;
+  margin: 20px 0 10px;
+}
+
+.assistant-html h1 {
+  font-size: 18px;
+}
+
+.assistant-html h2 {
+  font-size: 16px;
+}
+
+.assistant-html h3,
+.assistant-html h4 {
+  font-family: var(--font-ui);
+  font-size: 15px;
+  font-weight: 600;
+  margin: 20px 0 10px;
+}
+
+/* Code inside a fenced block: undo the inline-code chip styling. */
+.assistant-html pre code {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+}

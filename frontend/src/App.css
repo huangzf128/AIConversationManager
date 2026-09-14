@@ -1,0 +1,6 @@
+/* Truly shared/global styles only. Page- and component-specific styles
+   live next to their own .tsx file. */
+body {
+  margin: 0;
+  font-family: system-ui, sans-serif;
+}
