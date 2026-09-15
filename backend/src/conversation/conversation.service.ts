@@ -214,34 +214,47 @@ export class ConversationService {
   private async syncDeleteMissing(platform: AiPlatform, imported: Conversation[]) {
     const importedIds = new Set(imported.map((c) => c.id));
 
-    const candidates = await this.prisma.conversation.findMany({
+    const dbIds = await this.prisma.conversation.findMany({
       where: { platform, starred: false },
-      select: {
-        id: true,
-        messages: {
-          select: {
-            attachments: {
-              select: { storagePath: true },
+      select: { id: true },
+    });
+
+    const toDeleteIds = dbIds.map((c) => c.id).filter((id) => !importedIds.has(id));
+    if (toDeleteIds.length === 0) return 0;
+
+    const BATCH_SIZE = 900;
+    let deleted = 0;
+
+    for (let offset = 0; offset < toDeleteIds.length; offset += BATCH_SIZE) {
+      const batch = toDeleteIds.slice(offset, offset + BATCH_SIZE);
+
+      const conversations = await this.prisma.conversation.findMany({
+        where: { id: { in: batch } },
+        select: {
+          id: true,
+          messages: {
+            select: {
+              attachments: {
+                select: { storagePath: true },
+              },
             },
           },
         },
-      },
-    });
+      });
 
-    const toDelete = candidates.filter((c) => !importedIds.has(c.id));
-    if (toDelete.length === 0) return 0;
-
-    for (const conversation of toDelete) {
-      for (const message of conversation.messages) {
-        for (const attachment of message.attachments) {
-          await this.attachmentStorage.delete(attachment.storagePath, platform);
+      for (const conversation of conversations) {
+        for (const message of conversation.messages) {
+          for (const attachment of message.attachments) {
+            await this.attachmentStorage.delete(attachment.storagePath, platform);
+          }
         }
+        await this.prisma.conversation.delete({ where: { id: conversation.id } });
+        deleted++;
       }
-      await this.prisma.conversation.delete({ where: { id: conversation.id } });
     }
 
-    this.logger.log(`Sync-deleted ${toDelete.length} conversation(s) for platform "${platform}"`);
-    return toDelete.length;
+    this.logger.log(`Sync-deleted ${deleted} conversation(s) for platform "${platform}"`);
+    return deleted;
   }
 
   private static readonly DUP_SUFFIX = /\(\d+\)$/;
@@ -372,77 +385,57 @@ export class ConversationService {
       select: { updatedAt: true },
     });
 
-    if (
-      existing &&
-      existing.updatedAt.getTime() === new Date(conversation.updatedAt).getTime()
-    ) {
+    const jsonUpdatedAt = new Date(conversation.updatedAt).getTime();
+
+    if (existing && existing.updatedAt.getTime() >= jsonUpdatedAt) {
       return;
     }
 
-    await this.prisma.conversation.upsert({
+    if (!existing) {
+      await this.prisma.conversation.create({
+        data: {
+          id: conversation.id,
+          platform: conversation.platform,
+          title: conversation.title,
+          createdAt: new Date(conversation.createdAt),
+          updatedAt: new Date(conversation.updatedAt),
+          messages: {
+            create: conversation.messages.map((message) => ({
+              id: message.id,
+              role: message.role,
+              content: message.content,
+              createdAt: new Date(message.createdAt),
+              hidden: false,
+            })),
+          },
+        },
+      });
+      return;
+    }
+
+    await this.prisma.conversation.update({
       where: { id: conversation.id },
-      create: {
-        id: conversation.id,
-        platform: conversation.platform,
-        title: conversation.title,
-        createdAt: new Date(conversation.createdAt),
-        updatedAt: new Date(conversation.updatedAt),
-      },
-      update: {
+      data: {
         title: conversation.title,
         updatedAt: new Date(conversation.updatedAt),
-        // `starred` and `hidden` are intentionally left untouched so the
-        // user's manual choices survive re-imports.
       },
     });
 
-    const importedMessageIds: string[] = [];
-    for (const message of conversation.messages) {
-      importedMessageIds.push(message.id);
-      await this.prisma.message.upsert({
-        where: { id: message.id },
-        create: {
+    const dbUpdatedAt = existing.updatedAt.getTime();
+    const newMessages = conversation.messages.filter(
+      (message) => new Date(message.createdAt).getTime() > dbUpdatedAt,
+    );
+
+    if (newMessages.length > 0) {
+      await this.prisma.message.createMany({
+        data: newMessages.map((message) => ({
           id: message.id,
           role: message.role,
           content: message.content,
           createdAt: new Date(message.createdAt),
           hidden: false,
           conversationId: conversation.id,
-        },
-        update: {
-          // Content can change if the source export is re-run after edits.
-          // `hidden` is intentionally left untouched here so the user's
-          // manual hide/show choices survive re-imports.
-          content: message.content,
-        },
-      });
-    }
-
-    // Delete messages in DB that are no longer present in the import
-    // (e.g. Gemini removes downstream messages after an edit).
-    // Also delete their attachment files from disk.
-    const staleMessages = await this.prisma.message.findMany({
-      where: {
-        conversationId: conversation.id,
-        id: { notIn: importedMessageIds },
-      },
-      select: {
-        id: true,
-        attachments: { select: { storagePath: true } },
-      },
-    });
-
-    if (staleMessages.length > 0) {
-      for (const msg of staleMessages) {
-        for (const att of msg.attachments) {
-          await this.attachmentStorage.delete(att.storagePath, conversation.platform);
-        }
-      }
-      await this.prisma.message.deleteMany({
-        where: {
-          conversationId: conversation.id,
-          id: { notIn: importedMessageIds },
-        },
+        })),
       });
     }
   }

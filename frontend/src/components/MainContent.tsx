@@ -26,6 +26,13 @@ interface MainContentProps {
   onToggleMessageHidden: (messageId: string, hidden: boolean) => void;
 }
 
+const PLATFORM_URLS: Record<string, (id: string) => string> = {
+  gemini: (id) => `https://gemini.google.com/app/${id}`,
+  chatgpt: (id) => `https://chatgpt.com/c/${id}`,
+  claude: (id) => `https://claude.ai/chat/${id}`,
+  deepseek: (id) => `https://chat.deepseek.com/chat/${id}`,
+};
+
 function formatTime(iso: string) {
   return new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 }
@@ -83,7 +90,14 @@ function MainContent({ conversation, loading, onToggleMessageHidden }: MainConte
     <main className="main-content" key={conversation.id}>
       <header className="thread-header">
         <div className="thread-header-top">
-          <span className={`platform-tag platform-tag-${conversation.platform}`}>{conversation.platform}</span>
+          <a
+            className={`platform-tag platform-tag-${conversation.platform}`}
+            href={PLATFORM_URLS[conversation.platform]?.(conversation.id)}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            {conversation.platform}
+          </a>
           <h1>{conversation.title}</h1>
         </div>
         <div className="thread-header-actions">

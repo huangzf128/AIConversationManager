@@ -91,6 +91,13 @@
   border-radius: 999px;
   border: 1px solid var(--border);
   color: var(--text-muted);
+  text-decoration: none;
+  cursor: pointer;
+  transition: opacity 120ms ease;
+}
+
+.platform-tag:hover {
+  opacity: 0.8;
 }
 
 .platform-tag-gemini { border-color: var(--platform-gemini); color: var(--platform-gemini); }

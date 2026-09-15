@@ -84,12 +84,23 @@ function Sidebar({
         <div className="filter-chatid">
           <label>
             Search by Chat ID
-            <input 
-              type="text" 
-              value={chatIdSearch} 
-              onChange={(e) => onChatIdSearchChange(e.target.value)}
-              placeholder="Enter chat ID to search..."
-            />
+            <div className="filter-chatid-input-wrap">
+              <input 
+                type="text" 
+                value={chatIdSearch} 
+                onChange={(e) => onChatIdSearchChange(e.target.value)}
+                placeholder="Enter chat ID to search..."
+              />
+              {chatIdSearch && (
+                <button
+                  type="button"
+                  className="filter-chatid-clear"
+                  onClick={() => onChatIdSearchChange('')}
+                >
+                  ×
+                </button>
+              )}
+            </div>
           </label>
         </div>
 

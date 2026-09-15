@@ -60,18 +60,27 @@ export class GeminiParser implements ConversationParser {
       return [];
     }
 
-    // Group records by chat_id. Records with no extractable chat_id are
-    // non-conversation noise (e.g. "previous feedback cleared" entries,
-    // which never carry a details[].url) and are dropped here — this is
-    // locale-independent, unlike matching on the noise entry's title text.
-    const grouped = new Map<string, TakeoutRecord[]>();
-    for (const record of records) {
-      const chatId = this.extractChatId(record);
-      if (!chatId) continue;
+    // Group records by chat_id. A single Takeout record can carry
+    // multiple chatIds when Google aggregates near-simultaneous edits
+    // across chats into one activity entry. Each detail[i] pairs with
+    // safeHtmlItem[i], so we track the index alongside the record.
+    // Records with no extractable chat_id are non-conversation noise
+    // (e.g. "previous feedback cleared" entries) and are dropped.
+    interface IndexedRecord {
+      record: TakeoutRecord;
+      detailIndex: number;
+    }
 
-      const bucket = grouped.get(chatId) ?? [];
-      bucket.push(record);
-      grouped.set(chatId, bucket);
+    const grouped = new Map<string, IndexedRecord[]>();
+    for (const record of records) {
+      const chatIds = this.extractChatIds(record);
+      if (chatIds.length === 0) continue;
+
+      for (let i = 0; i < chatIds.length; i++) {
+        const bucket = grouped.get(chatIds[i]) ?? [];
+        bucket.push({ record, detailIndex: i });
+        grouped.set(chatIds[i], bucket);
+      }
     }
 
     const conversations: Conversation[] = [];
@@ -79,21 +88,22 @@ export class GeminiParser implements ConversationParser {
       // Takeout entries come back newest-first; conversations should read
       // chronologically (oldest message first).
       bucket.sort(
-        (a, b) => new Date(a.time ?? 0).getTime() - new Date(b.time ?? 0).getTime(),
+        (a, b) =>
+          new Date(a.record.time ?? 0).getTime() - new Date(b.record.time ?? 0).getTime(),
       );
 
       const messages: ConversationMessage[] = [];
-      for (const record of bucket) {
-        messages.push(...this.toMessages(record, chatId));
+      for (const { record, detailIndex } of bucket) {
+        messages.push(...this.toMessages(record, chatId, detailIndex));
       }
       if (messages.length === 0) continue;
 
       conversations.push({
         id: chatId,
         platform: 'gemini',
-        title: this.deriveTitle(bucket),
-        createdAt: bucket[0].time ?? new Date().toISOString(),
-        updatedAt: bucket[bucket.length - 1].time ?? new Date().toISOString(),
+        title: this.deriveTitle(bucket[0].record),
+        createdAt: bucket[0].record.time ?? new Date().toISOString(),
+        updatedAt: bucket[bucket.length - 1].record.time ?? new Date().toISOString(),
         messages,
       });
     }
@@ -101,12 +111,13 @@ export class GeminiParser implements ConversationParser {
     return conversations;
   }
 
-  private extractChatId(record: TakeoutRecord): string | null {
+  private extractChatIds(record: TakeoutRecord): string[] {
+    const ids: string[] = [];
     for (const detail of record.details ?? []) {
       const match = detail.url?.match(CHAT_ID_PATTERN);
-      if (match) return match[1];
+      if (match) ids.push(match[1]);
     }
-    return null;
+    return ids;
   }
 
   /**
@@ -114,8 +125,10 @@ export class GeminiParser implements ConversationParser {
    * in `title`) and, when present, Gemini's reply (encoded as raw HTML
    * in `safeHtmlItem`). Split that into up to two ConversationMessage
    * entries, in user-then-assistant order.
+   * When a record carries multiple chatIds, `detailIndex` selects which
+   * safeHtmlItem corresponds to this particular chat.
    */
-  private toMessages(record: TakeoutRecord, chatId: string): ConversationMessage[] {
+  private toMessages(record: TakeoutRecord, chatId: string, detailIndex: number): ConversationMessage[] {
     const time = record.time ?? new Date().toISOString();
     const messages: ConversationMessage[] = [];
 
@@ -130,10 +143,7 @@ export class GeminiParser implements ConversationParser {
       });
     }
 
-    // NOTE: this HTML is rendered as-is for now. If it needs to be shown
-    // as plain text or sanitized before persisting, that conversion should
-    // happen here (or in ConversationService before saving to Prisma).
-    const replyHtml = record.safeHtmlItem?.[0]?.html;
+    const replyHtml = record.safeHtmlItem?.[detailIndex]?.html;
     if (replyHtml) {
       messages.push({
         id: `${chatId}-${time}-assistant`,
@@ -168,8 +178,8 @@ export class GeminiParser implements ConversationParser {
     return match ? match[1].trim() : title.trim();
   }
 
-  private deriveTitle(bucket: TakeoutRecord[]): string {
-    const firstUserText = this.extractUserText(bucket[0]?.title);
+  private deriveTitle(firstRecord: TakeoutRecord): string {
+    const firstUserText = this.extractUserText(firstRecord?.title);
     return firstUserText ? firstUserText.slice(0, 60) : 'Gemini conversation';
   }
 }
