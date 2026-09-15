@@ -22,6 +22,7 @@ const PLATFORM_EXPORT_HINTS: Record<Platform, string> = {
 function UploadPage() {
   const [platform, setPlatform] = useState<Platform>('gemini');
   const [file, setFile] = useState<File | null>(null);
+  const [syncDelete, setSyncDelete] = useState(false);
   const [status, setStatus] = useState<{ type: 'info' | 'success' | 'error'; text: string } | null>(null);
   const [uploading, setUploading] = useState(false);
 
@@ -33,6 +34,7 @@ function UploadPage() {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('platform', platform);
+    if (syncDelete) formData.append('syncDelete', 'true');
 
     try {
       const res = await fetch('http://localhost:3000/conversations/upload', {
@@ -50,7 +52,9 @@ function UploadPage() {
         return;
       }
 
-      setStatus({ type: 'success', text: `Imported ${body?.imported ?? 0} conversation(s).` });
+      const parts = [`Imported ${body?.imported ?? 0} conversation(s).`];
+      if (body?.deleted > 0) parts.push(`Sync-deleted ${body.deleted} conversation(s).`);
+      setStatus({ type: 'success', text: parts.join(' ') });
     } catch {
       setStatus({ type: 'error', text: 'Upload failed. Is the backend running?' });
     } finally {
@@ -101,6 +105,16 @@ function UploadPage() {
             accept=".json,.zip,application/json,application/zip"
             onChange={(e) => setFile(e.target.files?.[0] ?? null)}
           />
+        </label>
+
+        <label className="upload-checkbox-label">
+          <input
+            type="checkbox"
+            checked={syncDelete}
+            onChange={(e) => setSyncDelete(e.target.checked)}
+          />
+          <span>Sync delete</span>
+          <span className="upload-checkbox-hint">Remove conversations in DB that are no longer in the export (starred conversations are always kept)</span>
         </label>
 
         <div className="upload-actions">

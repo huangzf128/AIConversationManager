@@ -35,8 +35,16 @@ export class AttachmentStorageService {
   }
 
   resolveAbsolutePath(storagePath: string, platform: string = 'gemini'): string {
-    // Always use the platform to build the full path, keeps database lean and path logic centralized
     const platformDir = platform.toLowerCase();
     return path.join(STORAGE_ROOT, platformDir, storagePath);
+  }
+
+  async delete(storagePath: string, platform: string): Promise<void> {
+    const absolutePath = this.resolveAbsolutePath(storagePath, platform);
+    try {
+      await fs.unlink(absolutePath);
+    } catch {
+      // File may already be absent (deduped, or manually removed); ignore.
+    }
   }
 }

@@ -168,6 +168,32 @@
   font-size: 11px;
 }
 
+.upload-checkbox-label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.upload-checkbox-label input[type='checkbox'] {
+  margin-top: 2px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.upload-checkbox-label > span:nth-child(2) {
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.upload-checkbox-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
 .upload-actions {
   display: flex;
   justify-content: flex-end;

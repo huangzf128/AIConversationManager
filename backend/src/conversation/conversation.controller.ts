@@ -48,6 +48,11 @@ export class ConversationController {
     return this.conversationService.setHidden(id, hidden);
   }
 
+  @Patch(':id/starred')
+  setStarred(@Param('id') id: string, @Body('starred') starred: boolean) {
+    return this.conversationService.setStarred(id, starred);
+  }
+
   @Patch(':id/messages/:messageId/hidden')
   setMessageHidden(@Param('messageId') messageId: string, @Body('hidden') hidden: boolean) {
     return this.conversationService.setMessageHidden(messageId, hidden);
@@ -55,7 +60,11 @@ export class ConversationController {
 
   @Post('upload')
   @UseInterceptors(FileInterceptor('file'))
-  async upload(@UploadedFile() file: Express.Multer.File, @Body('platform') platform?: string) {
+  async upload(
+    @UploadedFile() file: Express.Multer.File,
+    @Body('platform') platform?: string,
+    @Body('syncDelete') syncDelete?: string,
+  ) {
     if (!file) {
       throw new BadRequestException('No file uploaded');
     }
@@ -65,14 +74,16 @@ export class ConversationController {
       throw new BadRequestException(`Unsupported platform: ${resolvedPlatform}`);
     }
 
+    const shouldSyncDelete = syncDelete === 'true';
+
     const isZip =
       file.originalname.toLowerCase().endsWith('.zip') || file.mimetype === 'application/zip';
 
     if (isZip) {
-      return this.conversationService.importFromZip(resolvedPlatform, file.buffer);
+      return this.conversationService.importFromZip(resolvedPlatform, file.buffer, shouldSyncDelete);
     }
 
     const rawFileContent = file.buffer.toString('utf-8');
-    return this.conversationService.importFromFile(resolvedPlatform, rawFileContent);
+    return this.conversationService.importFromFile(resolvedPlatform, rawFileContent, shouldSyncDelete);
   }
 }

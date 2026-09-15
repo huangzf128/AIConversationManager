@@ -47,6 +47,13 @@ export class ConversationService {
     });
   }
 
+  setStarred(id: string, starred: boolean) {
+    return this.prisma.conversation.update({
+      where: { id },
+      data: { starred },
+    });
+  }
+
   setMessageHidden(messageId: string, hidden: boolean) {
     return this.prisma.message.update({
       where: { id: messageId },
@@ -86,7 +93,7 @@ export class ConversationService {
    * upserted, so nothing is duplicated and manually hidden messages stay
    * hidden.
    */
-  async importFromFile(platform: AiPlatform, rawFileContent: string) {
+  async importFromFile(platform: AiPlatform, rawFileContent: string, syncDelete = false) {
     const parser = this.parsers[platform];
     if (!parser) {
       throw new BadRequestException(`Unsupported platform: ${platform}`);
@@ -97,7 +104,12 @@ export class ConversationService {
       await this.upsertConversation(conversation);
     }
 
-    return { imported: conversations.length };
+    let deleted = 0;
+    if (syncDelete) {
+      deleted = await this.syncDeleteMissing(platform, conversations);
+    }
+
+    return { imported: conversations.length, deleted };
   }
 
   /**
@@ -107,7 +119,7 @@ export class ConversationService {
    * conversations. This avoids relying on the (often localized) folder
    * names inside the export to find the right file.
    */
-  async importFromZip(platform: AiPlatform, zipBuffer: Buffer) {
+  async importFromZip(platform: AiPlatform, zipBuffer: Buffer, syncDelete = false) {
     const parser = this.parsers[platform];
     if (!parser) {
       throw new BadRequestException(`Unsupported platform: ${platform}`);
@@ -186,7 +198,53 @@ export class ConversationService {
       }
     }
 
-    return { imported: conversations.length };
+    let deleted = 0;
+    if (syncDelete) {
+      deleted = await this.syncDeleteMissing(platform, conversations);
+    }
+
+    return { imported: conversations.length, deleted };
+  }
+
+  /**
+   * Delete conversations in the DB for the given platform that are not
+   * present in the uploaded export. Starred conversations are always kept.
+   * Returns the number of conversations deleted.
+   */
+  private async syncDeleteMissing(platform: AiPlatform, imported: Conversation[]) {
+    const importedIds = new Set(imported.map((c) => c.id));
+
+    const toDelete = await this.prisma.conversation.findMany({
+      where: {
+        platform,
+        starred: false,
+        id: { notIn: [...importedIds] },
+      },
+      select: {
+        id: true,
+        messages: {
+          select: {
+            attachments: {
+              select: { storagePath: true },
+            },
+          },
+        },
+      },
+    });
+
+    if (toDelete.length === 0) return 0;
+
+    for (const conversation of toDelete) {
+      for (const message of conversation.messages) {
+        for (const attachment of message.attachments) {
+          await this.attachmentStorage.delete(attachment.storagePath, platform);
+        }
+      }
+      await this.prisma.conversation.delete({ where: { id: conversation.id } });
+    }
+
+    this.logger.log(`Sync-deleted ${toDelete.length} conversation(s) for platform "${platform}"`);
+    return toDelete.length;
   }
 
   private static readonly DUP_SUFFIX = /\(\d+\)$/;
@@ -324,6 +382,8 @@ export class ConversationService {
       update: {
         title: conversation.title,
         updatedAt: new Date(conversation.updatedAt),
+        // `starred` is intentionally left untouched so the user's
+        // manual star/unstar choices survive re-imports.
       },
     });
 

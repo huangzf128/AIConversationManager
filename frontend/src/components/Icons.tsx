@@ -26,6 +26,10 @@ interface EyeIconProps {
   hidden: boolean;
 }
 
+interface StarIconProps {
+  starred: boolean;
+}
+
 export function UploadIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
@@ -63,6 +67,21 @@ export function EyeIcon({ hidden }: EyeIconProps) {
         strokeLinejoin="round"
       />
       <circle cx="8" cy="8" r="2" stroke="currentColor" strokeWidth="1.4" />
+    </svg>
+  );
+}
+
+export function StarIcon({ starred }: StarIconProps) {
+  if (starred) {
+    return (
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" stroke="currentColor" strokeWidth="1">
+        <path d="M8 1.5l1.85 3.75 4.15.6-3 2.93.71 4.12L8 10.87l-3.71 1.95L5 8.78l-3-2.93 4.15-.6z" />
+      </svg>
+    );
+  }
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2">
+      <path d="M8 1.5l1.85 3.75 4.15.6-3 2.93.71 4.12L8 10.87l-3.71 1.95L5 8.78l-3-2.93 4.15-.6z" strokeLinejoin="round" />
     </svg>
   );
 }

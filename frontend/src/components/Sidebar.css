@@ -246,9 +246,27 @@
   opacity: 0.4;
 }
 
+.row-star-button {
+  position: absolute;
+  top: 8px;
+  right: 32px;
+  opacity: 0.4;
+}
+
+.icon-button.row-star-button-active {
+  opacity: 1;
+  color: #f5c518;
+}
+
 .conversation-row:hover .row-hide-button,
 .conversation-row:focus-within .row-hide-button,
 .row-hide-button:hover {
+  opacity: 1;
+}
+
+.conversation-row:hover .row-star-button,
+.conversation-row:focus-within .row-star-button,
+.row-star-button:hover {
   opacity: 1;
 }
 

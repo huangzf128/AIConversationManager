@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import './Sidebar.css';
-import { EyeIcon, UploadIcon } from './Icons';
+import { EyeIcon, UploadIcon, StarIcon } from './Icons';
 import ToggleSwitch from './ToggleSwitch.js';
 import type { ConversationListItem } from '../pages/MyPage';
 
@@ -20,6 +20,7 @@ interface SidebarProps {
   selectedId: string | null;
   onSelect: (id: string) => void;
   onToggleHidden: (id: string, hidden: boolean) => void;
+  onToggleStarred: (id: string, starred: boolean) => void;
 }
 
 function formatDate(iso: string) {
@@ -42,6 +43,7 @@ function Sidebar({
   selectedId,
   onSelect,
   onToggleHidden,
+  onToggleStarred,
 }: SidebarProps) {
   return (
     <aside className="sidebar">
@@ -121,6 +123,24 @@ function Sidebar({
               <span className="row-meta">
                 {conversation.platform} · {conversation._count.messages} messages · {formatDate(conversation.updatedAt)}
               </span>
+            </span>
+            <span
+              className={`icon-button row-star-button ${conversation.starred ? 'row-star-button-active' : ''}`}
+              role="button"
+              tabIndex={0}
+              title={conversation.starred ? 'Unstar conversation' : 'Star conversation'}
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleStarred(conversation.id, !conversation.starred);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.stopPropagation();
+                  onToggleStarred(conversation.id, !conversation.starred);
+                }
+              }}
+            >
+              <StarIcon starred={conversation.starred} />
             </span>
             <span
               className="icon-button row-hide-button"

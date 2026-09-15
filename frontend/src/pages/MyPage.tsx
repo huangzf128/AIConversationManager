@@ -10,6 +10,7 @@ export interface ConversationListItem {
   createdAt: string;
   updatedAt: string;
   hidden: boolean;
+  starred: boolean;
   _count: { messages: number };
 }
 
@@ -110,9 +111,20 @@ function MyPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ hidden }),
     }).catch(() => {
-      // Revert on failure.
       setConversations((prev) => prev.map((c) => (c.id === id ? { ...c, hidden: !hidden } : c)));
       setDetailsCache((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], hidden: !hidden } } : prev));
+    });
+  };
+
+  const handleToggleStarred = (id: string, starred: boolean) => {
+    setConversations((prev) => prev.map((c) => (c.id === id ? { ...c, starred } : c)));
+
+    fetch(`${API_BASE}/conversations/${id}/starred`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ starred }),
+    }).catch(() => {
+      setConversations((prev) => prev.map((c) => (c.id === id ? { ...c, starred: !starred } : c)));
     });
   };
 
@@ -169,6 +181,7 @@ function MyPage() {
         selectedId={selectedId}
         onSelect={setSelectedId}
         onToggleHidden={handleToggleHidden}
+        onToggleStarred={handleToggleStarred}
       />
       <MainContent
         key={selectedId}
