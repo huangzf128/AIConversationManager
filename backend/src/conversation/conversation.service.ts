@@ -214,12 +214,8 @@ export class ConversationService {
   private async syncDeleteMissing(platform: AiPlatform, imported: Conversation[]) {
     const importedIds = new Set(imported.map((c) => c.id));
 
-    const toDelete = await this.prisma.conversation.findMany({
-      where: {
-        platform,
-        starred: false,
-        id: { notIn: [...importedIds] },
-      },
+    const candidates = await this.prisma.conversation.findMany({
+      where: { platform, starred: false },
       select: {
         id: true,
         messages: {
@@ -232,6 +228,7 @@ export class ConversationService {
       },
     });
 
+    const toDelete = candidates.filter((c) => !importedIds.has(c.id));
     if (toDelete.length === 0) return 0;
 
     for (const conversation of toDelete) {
@@ -370,6 +367,18 @@ export class ConversationService {
   }
 
   private async upsertConversation(conversation: Conversation) {
+    const existing = await this.prisma.conversation.findUnique({
+      where: { id: conversation.id },
+      select: { updatedAt: true },
+    });
+
+    if (
+      existing &&
+      existing.updatedAt.getTime() === new Date(conversation.updatedAt).getTime()
+    ) {
+      return;
+    }
+
     await this.prisma.conversation.upsert({
       where: { id: conversation.id },
       create: {
@@ -382,12 +391,14 @@ export class ConversationService {
       update: {
         title: conversation.title,
         updatedAt: new Date(conversation.updatedAt),
-        // `starred` is intentionally left untouched so the user's
-        // manual star/unstar choices survive re-imports.
+        // `starred` and `hidden` are intentionally left untouched so the
+        // user's manual choices survive re-imports.
       },
     });
 
+    const importedMessageIds: string[] = [];
     for (const message of conversation.messages) {
+      importedMessageIds.push(message.id);
       await this.prisma.message.upsert({
         where: { id: message.id },
         create: {
@@ -403,6 +414,34 @@ export class ConversationService {
           // `hidden` is intentionally left untouched here so the user's
           // manual hide/show choices survive re-imports.
           content: message.content,
+        },
+      });
+    }
+
+    // Delete messages in DB that are no longer present in the import
+    // (e.g. Gemini removes downstream messages after an edit).
+    // Also delete their attachment files from disk.
+    const staleMessages = await this.prisma.message.findMany({
+      where: {
+        conversationId: conversation.id,
+        id: { notIn: importedMessageIds },
+      },
+      select: {
+        id: true,
+        attachments: { select: { storagePath: true } },
+      },
+    });
+
+    if (staleMessages.length > 0) {
+      for (const msg of staleMessages) {
+        for (const att of msg.attachments) {
+          await this.attachmentStorage.delete(att.storagePath, conversation.platform);
+        }
+      }
+      await this.prisma.message.deleteMany({
+        where: {
+          conversationId: conversation.id,
+          id: { notIn: importedMessageIds },
         },
       });
     }
