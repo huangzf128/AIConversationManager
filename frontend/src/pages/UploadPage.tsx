@@ -14,7 +14,7 @@ const PLATFORMS: { value: Platform; label: string }[] = [
 
 const PLATFORM_EXPORT_HINTS: Record<Platform, string> = {
   chatgpt: 'conversations.json',
-  gemini: 'Gemini Takeout export (.json)',
+  gemini: 'Gemini Takeout export (.zip or .json)',
   claude: 'conversations.json',
   deepseek: 'exported conversations (.json)',
 };
@@ -92,13 +92,13 @@ function UploadPage() {
 
         <label className={`upload-dropzone ${file ? 'upload-dropzone-has-file' : ''}`}>
           <UploadIcon />
-          <span className="upload-dropzone-main">{file ? file.name : 'Choose or drop your export (.json)'}</span>
+          <span className="upload-dropzone-main">{file ? file.name : 'Choose or drop your export (.json or .zip)'}</span>
           <span className="upload-dropzone-sub">
             {file ? `${(file.size / 1024).toFixed(1)} KB` : `Supported platform: ${platform}`}
           </span>
           <input
             type="file"
-            accept=".json,application/json"
+            accept=".json,.zip,application/json,application/zip"
             onChange={(e) => setFile(e.target.files?.[0] ?? null)}
           />
         </label>

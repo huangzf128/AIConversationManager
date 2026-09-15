@@ -3,13 +3,16 @@ import {
   Body,
   Controller,
   Get,
+  NotFoundException,
   Param,
   Patch,
   Post,
+  Res,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import type { Response } from 'express';
 import { ConversationService } from './conversation.service.js';
 import { AiPlatform } from '../common/interfaces/conversation.interface.js';
 
@@ -22,6 +25,17 @@ export class ConversationController {
   @Get()
   findAll() {
     return this.conversationService.findAll();
+  }
+
+  @Get('attachments/:id/download')
+  async downloadAttachment(@Param('id') id: string, @Res() res: Response) {
+    const attachment = await this.conversationService.findAttachment(id);
+    if (!attachment) throw new NotFoundException('Attachment not found');
+
+    // Get the platform from the parent conversation to build the correct path
+    const platform = attachment.message?.conversation?.platform || 'gemini';
+    const absolutePath = this.conversationService.resolveAttachmentPath(attachment.storagePath, platform);
+    res.download(absolutePath, attachment.displayName);
   }
 
   @Get(':id')
@@ -41,15 +55,21 @@ export class ConversationController {
 
   @Post('upload')
   @UseInterceptors(FileInterceptor('file'))
-  upload(@UploadedFile() file: Express.Multer.File, @Body('platform') platform?: string) {
+  async upload(@UploadedFile() file: Express.Multer.File, @Body('platform') platform?: string) {
     if (!file) {
       throw new BadRequestException('No file uploaded');
     }
 
-    // Default to 'gemini' for now since it's the only parser implemented.
     const resolvedPlatform = (platform ?? 'gemini') as AiPlatform;
     if (!SUPPORTED_PLATFORMS.includes(resolvedPlatform)) {
       throw new BadRequestException(`Unsupported platform: ${resolvedPlatform}`);
+    }
+
+    const isZip =
+      file.originalname.toLowerCase().endsWith('.zip') || file.mimetype === 'application/zip';
+
+    if (isZip) {
+      return this.conversationService.importFromZip(resolvedPlatform, file.buffer);
     }
 
     const rawFileContent = file.buffer.toString('utf-8');

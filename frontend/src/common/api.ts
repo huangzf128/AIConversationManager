@@ -11,3 +11,7 @@ export async function fetchConversation(id: string) {
   const res = await fetch(`${API_BASE_URL}/conversations/${id}`);
   return res.json();
 }
+
+export function attachmentDownloadUrl(attachmentId: string) {
+  return `${API_BASE_URL}/conversations/attachments/${attachmentId}/download`;
+}

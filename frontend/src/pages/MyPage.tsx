@@ -13,12 +13,18 @@ export interface ConversationListItem {
   _count: { messages: number };
 }
 
+export interface AttachmentItem {
+  id: string;
+  displayName: string;
+}
+
 export interface MessageItem {
   id: string;
   role: string;
   content: string;
   createdAt: string;
   hidden: boolean;
+  attachments: AttachmentItem[];
 }
 
 export interface ConversationDetail {

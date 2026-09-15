@@ -30,4 +30,18 @@ model Message {
   hidden         Boolean      @default(false)
   conversationId String
   conversation   Conversation @relation(fields: [conversationId], references: [id])
+  attachments    Attachment[]
+}
+
+model Attachment {
+  id          String   @id @default(cuid())
+  messageId   String
+  message     Message  @relation(fields: [messageId], references: [id])
+  displayName String
+  storagePath String
+  contentHash String
+  size        Int
+  createdAt   DateTime @default(now())
+
+  @@unique([messageId, contentHash])
 }

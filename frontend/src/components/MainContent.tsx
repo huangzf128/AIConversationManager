@@ -5,6 +5,7 @@ import './MainContent.css';
 import { ChevronIcon, EyeIcon } from './Icons';
 import ToggleSwitch from './ToggleSwitch.js';
 import type { ConversationDetail } from '../pages/MyPage';
+import { attachmentDownloadUrl } from '../common/api.js';
 
 // Platforms whose export stores assistant content as raw HTML (Gemini's
 // safeHtmlItem). Everything else (Claude, ChatGPT, DeepSeek) exports
@@ -34,6 +35,14 @@ function MainContent({ conversation, loading, onToggleMessageHidden }: MainConte
   // different conversation is opened — everything starts expanded.
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
   const [showHiddenMessages, setShowHiddenMessages] = useState(false);
+  // Image preview modal state
+  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
+
+  // Helper to check if attachment is an image based on file extension
+  const isImageAttachment = (displayName: string): boolean => {
+    const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg'];
+    return imageExtensions.some(ext => displayName.toLowerCase().endsWith(ext));
+  };
 
 
 
@@ -139,10 +148,44 @@ function MainContent({ conversation, loading, onToggleMessageHidden }: MainConte
                 ) : (
                   <p className="message-text">{message.content}</p>
                 ))}
+              {/* Display attachments for this message right below it */}
+              {!isCollapsed && message.attachments && message.attachments.length > 0 && (
+                <div className="message-attachments">
+                  <span className="attachments-label">Attachments:</span>
+                  <ul className="attachments-list">
+                    {message.attachments.map((a) => (
+                      <li key={a.id}>
+                        {isImageAttachment(a.displayName) ? (
+                          <img 
+                            src={attachmentDownloadUrl(a.id)} 
+                            alt={a.displayName}
+                            className="attachment-image"
+                            onClick={() => setPreviewImageUrl(attachmentDownloadUrl(a.id))}
+                          />
+                        ) : (
+                          <a href={attachmentDownloadUrl(a.id)} target="_blank" rel="noopener noreferrer">
+                            {a.displayName}
+                          </a>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
           );
         })}
       </div>
+
+      {/* Image Preview Modal */}
+       {previewImageUrl && (
+         <div className="image-modal" onClick={() => setPreviewImageUrl(null)}>
+           <button className="modal-close" onClick={() => setPreviewImageUrl(null)}>
+             ×
+           </button>
+           <img src={previewImageUrl} alt="Full size preview" className="modal-image" />
+         </div>
+       )}
     </main>
   );
 }

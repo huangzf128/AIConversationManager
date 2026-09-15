@@ -3,6 +3,7 @@ import { ConversationParser } from '../../../common/interfaces/parser.interface.
 import {
   Conversation,
   ConversationMessage,
+  ConversationAttachment,
 } from '../../../common/interfaces/conversation.interface.js';
 
 /**
@@ -18,12 +19,24 @@ interface TakeoutSafeHtmlItem {
   html?: string;
 }
 
+// Some subtitle entries describe an attachment: { name: '-  original.sql',
+// url: 'original-<hash>.sql' }. `url` here matches an entry in
+// `attachedFiles` and is the filename actually stored in the export;
+// `name` carries the original filename, locale-independent (just a
+// leading bullet character before the name).
+interface TakeoutSubtitle {
+  name?: string;
+  url?: string;
+}
+
 interface TakeoutRecord {
   header?: string;
   title?: string;
   time?: string;
   details?: TakeoutDetail[];
   safeHtmlItem?: TakeoutSafeHtmlItem[];
+  subtitles?: TakeoutSubtitle[];
+  attachedFiles?: string[];  
 }
 
 // Matches the chat id in a Gemini share URL, e.g.
@@ -113,6 +126,7 @@ export class GeminiParser implements ConversationParser {
         role: 'user',
         content: userText,
         createdAt: time,
+        attachments: this.extractAttachments(record),
       });
     }
 
@@ -130,6 +144,22 @@ export class GeminiParser implements ConversationParser {
     }
 
     return messages;
+  }
+
+  // `attachedFiles` gives the filenames actually stored in the export
+  // (relative to the same folder as the JSON file). `subtitles` maps
+  // each of those back to the original filename the user uploaded.
+  private extractAttachments(record: TakeoutRecord): ConversationAttachment[] | undefined {
+    const storedNames = record.attachedFiles ?? [];
+    if (storedNames.length === 0) return undefined;
+
+    return storedNames.map((storedName) => {
+      const subtitle = record.subtitles?.find((s) => s.url === storedName);
+      const displayName = subtitle?.name
+        ? subtitle.name.replace(/^[-\s]+/, '')
+        : storedName;
+      return { storedName, displayName };
+    });
   }
 
   private extractUserText(title?: string): string | null {
