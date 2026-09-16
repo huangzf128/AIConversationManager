@@ -38,12 +38,13 @@ conversation:
 
 | Field | Description |
 |-------|-------------|
-| `title` | User prompt, prefixed with a locale-specific label (e.g. `送信したメッセージ: `). The parser strips everything before the first colon. |
+| `title` | User prompt, prefixed with a locale-specific label (e.g. `送信したメッセージ: `). The parser strips everything before the first colon. When the user sends only an image with no text, the title is just the label with an empty prompt (e.g. `送信したメッセージ: `). |
 | `time` | ISO 8601 timestamp of this activity |
 | `details[].url` | Contains the chat URL `https://gemini.google.com/app/{chatId}`. The chatId is extracted via regex `/\/app\/([0-9a-fA-F]+)/`. |
 | `safeHtmlItem[].html` | Assistant reply as raw HTML. Rendered as-is in the UI (sanitized by DOMPurify on the frontend). |
 | `subtitles[].name` | Original filename of an attachment (with a leading bullet). Maps to `subtitles[].url` which is the stored filename in the zip. |
 | `attachedFiles[]` | Filenames of attachments as stored in the zip (relative to the JSON's directory). |
+| `imageFile` | The primary image filename when the user sent an image. Always also appears in `attachedFiles`. |
 
 ## Multi-ChatId Records
 
@@ -91,3 +92,26 @@ The parser handles this by:
 Records without an extractable chatId (e.g. "previous feedback cleared")
 are dropped during the grouping step. This is locale-independent — it
 doesn't rely on matching noise entry title text.
+
+## Image-Only Messages
+
+When a user sends only an image with no accompanying text, the Takeout
+record has an empty prompt after the locale-specific label:
+
+```jsonc
+{
+  "title": "送信したメッセージ: ",   // empty prompt
+  "subtitles": [
+    { "name": "添付ファイル 1 件" },
+    { "name": "-  screenshot.png", "url": "screenshot-abc123.png" }
+  ],
+  "imageFile": "screenshot-abc123.png",
+  "attachedFiles": ["screenshot-abc123.png"],
+  "safeHtmlItem": [{ "html": "<p>Reply to the image...</p>" }]
+}
+```
+
+The parser handles this by creating a user message even when `title`
+contains no text, as long as the record has attachments. The message
+content is set to `[画像]` as a placeholder, and the attachments are
+preserved normally.

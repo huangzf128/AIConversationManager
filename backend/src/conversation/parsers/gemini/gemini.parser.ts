@@ -36,7 +36,8 @@ interface TakeoutRecord {
   details?: TakeoutDetail[];
   safeHtmlItem?: TakeoutSafeHtmlItem[];
   subtitles?: TakeoutSubtitle[];
-  attachedFiles?: string[];  
+  attachedFiles?: string[];
+  imageFile?: string;
 }
 
 // Matches the chat id in a Gemini share URL, e.g.
@@ -89,7 +90,8 @@ export class GeminiParser implements ConversationParser {
       // chronologically (oldest message first).
       bucket.sort(
         (a, b) =>
-          new Date(a.record.time ?? 0).getTime() - new Date(b.record.time ?? 0).getTime(),
+          new Date(a.record.time ?? 0).getTime() -
+          new Date(b.record.time ?? 0).getTime(),
       );
 
       const messages: ConversationMessage[] = [];
@@ -103,7 +105,8 @@ export class GeminiParser implements ConversationParser {
         platform: 'gemini',
         title: this.deriveTitle(bucket[0].record),
         createdAt: bucket[0].record.time ?? new Date().toISOString(),
-        updatedAt: bucket[bucket.length - 1].record.time ?? new Date().toISOString(),
+        updatedAt:
+          bucket[bucket.length - 1].record.time ?? new Date().toISOString(),
         messages,
       });
     }
@@ -128,18 +131,23 @@ export class GeminiParser implements ConversationParser {
    * When a record carries multiple chatIds, `detailIndex` selects which
    * safeHtmlItem corresponds to this particular chat.
    */
-  private toMessages(record: TakeoutRecord, chatId: string, detailIndex: number): ConversationMessage[] {
+  private toMessages(
+    record: TakeoutRecord,
+    chatId: string,
+    detailIndex: number,
+  ): ConversationMessage[] {
     const time = record.time ?? new Date().toISOString();
     const messages: ConversationMessage[] = [];
 
     const userText = this.extractUserText(record.title);
-    if (userText) {
+    const attachments = this.extractAttachments(record);
+    if (userText || attachments?.length) {
       messages.push({
         id: `${chatId}-${time}-user`,
         role: 'user',
-        content: userText,
+        content: userText || '[画像]',
         createdAt: time,
-        attachments: this.extractAttachments(record),
+        attachments,
       });
     }
 
@@ -159,7 +167,9 @@ export class GeminiParser implements ConversationParser {
   // `attachedFiles` gives the filenames actually stored in the export
   // (relative to the same folder as the JSON file). `subtitles` maps
   // each of those back to the original filename the user uploaded.
-  private extractAttachments(record: TakeoutRecord): ConversationAttachment[] | undefined {
+  private extractAttachments(
+    record: TakeoutRecord,
+  ): ConversationAttachment[] | undefined {
     const storedNames = record.attachedFiles ?? [];
     if (storedNames.length === 0) return undefined;
 
