@@ -13,7 +13,7 @@ const PLATFORMS: { value: Platform; label: string }[] = [
 ];
 
 const PLATFORM_EXPORT_HINTS: Record<Platform, string> = {
-  chatgpt: 'conversations.json',
+  chatgpt: 'OpenAI export (.zip)',
   gemini: 'Gemini Takeout export (.zip or .json)',
   claude: 'conversations.json',
   deepseek: 'exported conversations (.json)',

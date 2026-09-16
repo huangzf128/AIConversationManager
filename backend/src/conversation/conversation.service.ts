@@ -2,7 +2,11 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import AdmZip from 'adm-zip';
 import * as path from 'node:path';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { AiPlatform, Conversation } from '../common/interfaces/conversation.interface.js';
+import {
+  AiPlatform,
+  Conversation,
+  ConversationMessage,
+} from '../common/interfaces/conversation.interface.js';
 import { ConversationParser } from '../common/interfaces/parser.interface.js';
 import { ChatgptParser } from './parsers/chatgpt/chatgpt.parser.js';
 import { GeminiParser } from './parsers/gemini/gemini.parser.js';
@@ -17,7 +21,7 @@ export class ConversationService {
 
   constructor(
     private readonly prisma: PrismaService,
-	private readonly attachmentStorage: AttachmentStorageService,
+    private readonly attachmentStorage: AttachmentStorageService,
     chatgptParser: ChatgptParser,
     geminiParser: GeminiParser,
     claudeParser: ClaudeParser,
@@ -64,27 +68,28 @@ export class ConversationService {
   findOne(id: string) {
     return this.prisma.conversation.findUnique({
       where: { id },
-      include: { 
-        messages: { 
+      include: {
+        messages: {
           orderBy: { createdAt: 'asc' },
-          include: { attachments: true }
-        } 
+          include: { attachments: true },
+        },
       },
     });
   }
 
   async findAttachment(id: string) {
     // Include the parent conversation to get its platform for correct path resolution
-    return this.prisma.attachment.findUnique({ 
+    return this.prisma.attachment.findUnique({
       where: { id },
-      include: { message: { include: { conversation: { select: { platform: true } } } } }
+      include: {
+        message: { include: { conversation: { select: { platform: true } } } },
+      },
     });
   }
 
   resolveAttachmentPath(storagePath: string, platform: string): string {
     return this.attachmentStorage.resolveAbsolutePath(storagePath, platform);
   }
-
 
   /**
    * Parse an uploaded export file for the given platform and persist the
@@ -93,7 +98,11 @@ export class ConversationService {
    * upserted, so nothing is duplicated and manually hidden messages stay
    * hidden.
    */
-  async importFromFile(platform: AiPlatform, rawFileContent: string, syncDelete = false) {
+  async importFromFile(
+    platform: AiPlatform,
+    rawFileContent: string,
+    syncDelete = false,
+  ) {
     const parser = this.parsers[platform];
     if (!parser) {
       throw new BadRequestException(`Unsupported platform: ${platform}`);
@@ -113,32 +122,82 @@ export class ConversationService {
   }
 
   /**
-   * Import from a platform export delivered as a zip (e.g. Google Takeout).
-   * Every .json entry in the zip is tried against the platform's parser —
-   * entries that don't match the expected shape simply yield zero
-   * conversations. This avoids relying on the (often localized) folder
-   * names inside the export to find the right file.
+   * Import from a platform export delivered as a zip (e.g. Google Takeout
+   * or OpenAI export). Every .json entry in the zip (including inside
+   * nested zips) is tried against the platform's parser — entries that
+   * don't match the expected shape simply yield zero conversations.
+   * Nested .zip entries (e.g. Conversations__xxx.zip inside the outer
+   * export) are recursively expanded so their JSON and attachment files
+   * are processed as if they were at the top level.
    */
-  async importFromZip(platform: AiPlatform, zipBuffer: Buffer, syncDelete = false) {
+  async importFromZip(
+    platform: AiPlatform,
+    zipBuffer: Buffer,
+    syncDelete = false,
+  ) {
     const parser = this.parsers[platform];
     if (!parser) {
       throw new BadRequestException(`Unsupported platform: ${platform}`);
     }
 
-    const zip = new AdmZip(zipBuffer);
-    const entries = zip.getEntries();
+    const { allEntries, jsonEntries } = this.flattenZipEntries(zipBuffer);
 
     const conversations: Conversation[] = [];
-    // Directory (inside the zip) that each conversation's JSON came from,
-    // used to resolve attachment filenames that are relative to it.
     const conversationDirs = new Map<string, string>();
 
-    for (const entry of entries) {
-      if (entry.isDirectory || !entry.entryName.toLowerCase().endsWith('.json')) continue;
+    const libraryFilesByDir = new Map<
+      string,
+      Map<
+        string,
+        {
+          fileId: string;
+          fileName: string;
+          messageId: string;
+          uploadTime: string;
+        }[]
+      >
+    >();
+
+    for (const { entryPath, data } of jsonEntries) {
+      if (platform === 'chatgpt' && entryPath.endsWith('library_files.json')) {
+        try {
+          const libDir = path.dirname(entryPath);
+          const arr = JSON.parse(data.toString('utf-8'));
+          if (!Array.isArray(arr)) continue;
+          const byThread = new Map<
+            string,
+            {
+              fileId: string;
+              fileName: string;
+              messageId: string;
+              uploadTime: string;
+            }[]
+          >();
+          for (const item of arr) {
+            if (!item.origination_thread_id || !item.file_id) continue;
+            if (!item.image_gen_generation_id) continue;
+            const list = byThread.get(item.origination_thread_id) ?? [];
+            const uploadTime = item.file_upload_time
+              ? new Date(item.file_upload_time).toISOString()
+              : new Date(0).toISOString();
+            list.push({
+              fileId: item.file_id,
+              fileName: item.file_name ?? item.file_id,
+              messageId: item.origination_message_id ?? '',
+              uploadTime,
+            });
+            byThread.set(item.origination_thread_id, list);
+          }
+          libraryFilesByDir.set(libDir, byThread);
+        } catch {
+          continue;
+        }
+        continue;
+      }
 
       let text: string;
       try {
-        text = entry.getData().toString('utf-8');
+        text = data.toString('utf-8');
       } catch {
         continue;
       }
@@ -151,46 +210,80 @@ export class ConversationService {
       }
       if (parsed.length === 0) continue;
 
-      const dir = path.dirname(entry.entryName);
+      const dir = path.dirname(entryPath);
       for (const conversation of parsed) {
         conversationDirs.set(conversation.id, dir);
       }
       conversations.push(...parsed);
     }
 
-    const { fuzzyEntryMap, consumed } = this.buildFuzzyEntryMap(zip);
+    if (platform === 'chatgpt') {
+      this.supplementDalleAttachments(
+        conversations,
+        conversationDirs,
+        libraryFilesByDir,
+      );
+    }
+
+    const { fuzzyEntryMap, consumed } =
+      this.buildFuzzyEntryMapFromEntries(allEntries);
 
     for (const conversation of conversations) {
-      await this.upsertConversation(conversation);
-      const dir = conversationDirs.get(conversation.id) ?? '.';
+      const insertedIds = new Set(await this.upsertConversation(conversation));
+      // Nothing was written for this conversation (already up to date),
+      // so there are no messages to attach files to.
+      if (insertedIds.size === 0) continue;
+
+      const dir = conversationDirs.get(conversation.id) ?? '';
 
       for (const message of conversation.messages) {
+        // Only write attachments for messages that were just inserted.
+        if (!insertedIds.has(message.id)) continue;
         if (!message.attachments?.length) continue;
 
         for (const attachment of message.attachments) {
-          const entryPath = dir === '.' ? attachment.storedName : `${dir}/${attachment.storedName}`;
-          const zipEntry = this.findZipEntry(fuzzyEntryMap, consumed, entryPath);
+          const primaryPath =
+            dir === '.' || dir === ''
+              ? attachment.storedName
+              : `${dir}/${attachment.storedName}`;
+          let match = this.findEntry(fuzzyEntryMap, consumed, primaryPath);
 
-          if (!zipEntry) {
-            this.logger.warn(`Attachment not found in zip [Chat ID: ${conversation.id}]: ${entryPath}`);
+          // Fallback: match by basename anywhere in the archive, in case
+          // the export keeps attachments in a sibling directory.
+          if (!match) {
+            match = this.findEntryByBasename(
+              fuzzyEntryMap,
+              consumed,
+              attachment.storedName,
+            );
+          }
+          if (!match) {
+            this.logger.warn(
+              `Attachment not found in zip [Chat ID: ${conversation.id}]: ${primaryPath}`,
+            );
             continue;
           }
 
-          const buffer = zipEntry.getData();
-          const { storagePath, contentHash } = await this.attachmentStorage.save(
-            buffer,
-            attachment.displayName,
-            conversation.platform,
-          );
+          const { storagePath, contentHash } =
+            await this.attachmentStorage.save(
+              match.data,
+              attachment.displayName,
+              conversation.platform,
+            );
 
           await this.prisma.attachment.upsert({
-            where: { messageId_contentHash: { messageId: message.id, contentHash } },
+            where: {
+              messageId_contentHash: {
+                messageId: message.id,
+                contentHash,
+              },
+            },
             create: {
               messageId: message.id,
               displayName: attachment.displayName,
               storagePath,
               contentHash,
-              size: buffer.length,
+              size: match.data.length,
             },
             update: {},
           });
@@ -206,12 +299,150 @@ export class ConversationService {
     return { imported: conversations.length, deleted };
   }
 
+  private supplementDalleAttachments(
+    conversations: Conversation[],
+    conversationDirs: Map<string, string>,
+    libraryFilesByDir: Map<
+      string,
+      Map<
+        string,
+        {
+          fileId: string;
+          fileName: string;
+          messageId: string;
+          uploadTime: string;
+        }[]
+      >
+    >,
+  ): void {
+    if (libraryFilesByDir.size === 0) return;
+
+    for (const conv of conversations) {
+      const dir = conversationDirs.get(conv.id) ?? '';
+      const byThread = libraryFilesByDir.get(dir);
+      if (!byThread) continue;
+
+      const dalleFiles = byThread.get(conv.id);
+      if (!dalleFiles?.length) continue;
+
+      const convAttachmentIds = new Set<string>();
+      for (const msg of conv.messages) {
+        for (const att of msg.attachments ?? []) {
+          convAttachmentIds.add(att.storedName);
+        }
+      }
+
+      const missing = dalleFiles
+        .filter((f) => !convAttachmentIds.has(`${f.fileId}.dat`))
+        .sort((a, b) => a.uploadTime.localeCompare(b.uploadTime));
+      if (missing.length === 0) continue;
+
+      const insertions: { index: number; msg: ConversationMessage }[] = [];
+
+      for (const f of missing) {
+        const storedName = `${f.fileId}.dat`;
+        convAttachmentIds.add(storedName);
+
+        const compoundId = f.messageId ? `${conv.id}-${f.messageId}` : '';
+        const existingMsg = compoundId
+          ? conv.messages.find((m) => m.id === compoundId)
+          : undefined;
+
+        if (existingMsg) {
+          if (!existingMsg.attachments) existingMsg.attachments = [];
+          existingMsg.attachments.push({ storedName, displayName: f.fileName });
+          if (!existingMsg.content.trim()) {
+            existingMsg.content = '[图片]';
+          }
+          continue;
+        }
+
+        let insertIdx = conv.messages.length;
+        for (let i = conv.messages.length - 1; i >= 0; i--) {
+          if (conv.messages[i].createdAt <= f.uploadTime) {
+            insertIdx = i + 1;
+            break;
+          }
+        }
+
+        const dalleMsg: ConversationMessage = {
+          id: `${conv.id}-dalle-${f.fileId}`,
+          role: 'assistant',
+          content: '[图片]',
+          createdAt: f.uploadTime,
+          attachments: [{ storedName, displayName: f.fileName }],
+        };
+
+        insertions.push({ index: insertIdx, msg: dalleMsg });
+      }
+
+      insertions.sort((a, b) => b.index - a.index);
+      for (const { index, msg } of insertions) {
+        const clamped = Math.min(index, conv.messages.length);
+        conv.messages.splice(clamped, 0, msg);
+      }
+    }
+  }
+
+  /**
+   * Recursively flatten a zip buffer into two lists,
+   *  - allEntries: every non-directory file (including inside nested zips),
+   *    with a virtual path that preserves the outer directory structure.
+   *  - jsonEntries: the subset whose path ends with .json.
+   * Nested .zip entries are expanded in-place: if the outer zip contains
+   * "User Online Activity/Conversations__xxx.zip", the inner zip's
+   * "conversations-000.json" appears as
+   * "User Online Activity/Conversations__xxx.zip/conversations-000.json".
+   */
+  private flattenZipEntries(
+    zipBuffer: Buffer,
+    prefix = '',
+  ): {
+    allEntries: { entryPath: string; data: Buffer }[];
+    jsonEntries: { entryPath: string; data: Buffer }[];
+  } {
+    const allEntries: { entryPath: string; data: Buffer }[] = [];
+    const jsonEntries: { entryPath: string; data: Buffer }[] = [];
+
+    const zip = new AdmZip(zipBuffer);
+
+    for (const entry of zip.getEntries()) {
+      if (entry.isDirectory) continue;
+
+      const entryPath = prefix
+        ? `${prefix}/${entry.entryName}`
+        : entry.entryName;
+      const data = entry.getData();
+      const lowerName = entry.entryName.toLowerCase();
+
+      if (lowerName.endsWith('.zip')) {
+        try {
+          const inner = this.flattenZipEntries(data, entryPath);
+          allEntries.push(...inner.allEntries);
+          jsonEntries.push(...inner.jsonEntries);
+        } catch {
+          allEntries.push({ entryPath, data });
+        }
+      } else {
+        allEntries.push({ entryPath, data });
+        if (lowerName.endsWith('.json')) {
+          jsonEntries.push({ entryPath, data });
+        }
+      }
+    }
+
+    return { allEntries, jsonEntries };
+  }
+
   /**
    * Delete conversations in the DB for the given platform that are not
    * present in the uploaded export. Starred conversations are always kept.
    * Returns the number of conversations deleted.
    */
-  private async syncDeleteMissing(platform: AiPlatform, imported: Conversation[]) {
+  private async syncDeleteMissing(
+    platform: AiPlatform,
+    imported: Conversation[],
+  ) {
     const importedIds = new Set(imported.map((c) => c.id));
 
     const dbIds = await this.prisma.conversation.findMany({
@@ -219,7 +450,9 @@ export class ConversationService {
       select: { id: true },
     });
 
-    const toDeleteIds = dbIds.map((c) => c.id).filter((id) => !importedIds.has(id));
+    const toDeleteIds = dbIds
+      .map((c) => c.id)
+      .filter((id) => !importedIds.has(id));
     if (toDeleteIds.length === 0) return 0;
 
     const BATCH_SIZE = 900;
@@ -245,15 +478,22 @@ export class ConversationService {
       for (const conversation of conversations) {
         for (const message of conversation.messages) {
           for (const attachment of message.attachments) {
-            await this.attachmentStorage.delete(attachment.storagePath, platform);
+            await this.attachmentStorage.delete(
+              attachment.storagePath,
+              platform,
+            );
           }
         }
-        await this.prisma.conversation.delete({ where: { id: conversation.id } });
+        await this.prisma.conversation.delete({
+          where: { id: conversation.id },
+        });
         deleted++;
       }
     }
 
-    this.logger.log(`Sync-deleted ${deleted} conversation(s) for platform "${platform}"`);
+    this.logger.log(
+      `Sync-deleted ${deleted} conversation(s) for platform "${platform}"`,
+    );
     return deleted;
   }
 
@@ -281,7 +521,9 @@ export class ConversationService {
    */
   private toFullPrefix(entryPath: string): string {
     const dir = path.dirname(entryPath);
-    const base = path.basename(entryPath).replace(ConversationService.DUP_SUFFIX, '');
+    const base = path
+      .basename(entryPath)
+      .replace(ConversationService.DUP_SUFFIX, '');
     return dir === '.' ? base : `${dir}/${base}`;
   }
 
@@ -356,21 +598,25 @@ export class ConversationService {
     const candidates = fuzzyEntryMap.get(prefix);
     if (!candidates) return null;
 
-    let idx = candidates.findIndex(e => !consumed.has(e) && e.entryName === entryPath);
+    let idx = candidates.findIndex(
+      (e) => !consumed.has(e) && e.entryName === entryPath,
+    );
     if (idx !== -1) {
       const entry = candidates[idx];
       consumed.add(entry);
       return entry;
     }
 
-    idx = candidates.findIndex(e => !consumed.has(e) && !this.hasDupSuffix(e.entryName));
+    idx = candidates.findIndex(
+      (e) => !consumed.has(e) && !this.hasDupSuffix(e.entryName),
+    );
     if (idx !== -1) {
       const entry = candidates[idx];
       consumed.add(entry);
       return entry;
     }
 
-    const fallback = candidates.find(e => !consumed.has(e));
+    const fallback = candidates.find((e) => !consumed.has(e));
     if (fallback) {
       consumed.add(fallback);
       return fallback;
@@ -379,16 +625,151 @@ export class ConversationService {
     return null;
   }
 
-  private async upsertConversation(conversation: Conversation) {
+  /**
+   * Fallback lookup: ignore directories and match by basename (with or
+   * without extension) anywhere in the archive. Used when an attachment is
+   * not stored next to the json that references it.
+   */
+  private findEntryByBasename(
+    fuzzyEntryMap: Map<string, { entryPath: string; data: Buffer }[]>,
+    consumed: Set<{ entryPath: string; data: Buffer }>,
+    storedName: string,
+  ): { entryPath: string; data: Buffer } | null {
+    const targetBase = path.basename(storedName).toLowerCase();
+    const targetNoExt = targetBase.replace(/\.[^.]+$/, '');
+
+    for (const list of fuzzyEntryMap.values()) {
+      for (const entry of list) {
+        if (consumed.has(entry)) continue;
+        const base = path.basename(entry.entryPath).toLowerCase();
+        if (
+          base === targetBase ||
+          base.replace(/\.[^.]+$/, '') === targetNoExt
+        ) {
+          consumed.add(entry);
+          return entry;
+        }
+      }
+    }
+    return null;
+  }
+
+  private buildFuzzyEntryMapFromEntries(
+    entries: { entryPath: string; data: Buffer }[],
+  ): {
+    fuzzyEntryMap: Map<string, { entryPath: string; data: Buffer }[]>;
+    consumed: Set<{ entryPath: string; data: Buffer }>;
+  } {
+    const map = new Map<string, { entryPath: string; data: Buffer }[]>();
+    const consumed = new Set<{ entryPath: string; data: Buffer }>();
+
+    for (const entry of entries) {
+      const fuzzyKey = this.toFuzzyPrefix(entry.entryPath);
+      const fullKey = this.toFullPrefix(entry.entryPath);
+
+      const fuzzyList = map.get(fuzzyKey) ?? [];
+      fuzzyList.push(entry);
+      map.set(fuzzyKey, fuzzyList);
+
+      if (fullKey !== fuzzyKey) {
+        const fullList = map.get(fullKey) ?? [];
+        fullList.push(entry);
+        map.set(fullKey, fullList);
+      }
+    }
+
+    const dupNum = /\((\d+)\)$/;
+    for (const list of map.values()) {
+      list.sort((a, b) => {
+        const aHas = this.hasDupSuffix(a.entryPath);
+        const bHas = this.hasDupSuffix(b.entryPath);
+        if (aHas !== bHas) return aHas ? 1 : -1;
+        const aBase = path.basename(a.entryPath, path.extname(a.entryPath));
+        const bBase = path.basename(b.entryPath, path.extname(b.entryPath));
+        const aM = aBase.match(dupNum);
+        const bM = bBase.match(dupNum);
+        return (aM ? parseInt(aM[1], 10) : 0) - (bM ? parseInt(bM[1], 10) : 0);
+      });
+    }
+
+    return { fuzzyEntryMap: map, consumed };
+  }
+
+  private findEntry(
+    fuzzyEntryMap: Map<string, { entryPath: string; data: Buffer }[]>,
+    consumed: Set<{ entryPath: string; data: Buffer }>,
+    entryPath: string,
+  ): { entryPath: string; data: Buffer } | null {
+    const prefix = this.toFuzzyPrefix(entryPath);
+    const candidates = fuzzyEntryMap.get(prefix);
+    if (!candidates) return null;
+
+    let idx = candidates.findIndex(
+      (e) => !consumed.has(e) && e.entryPath === entryPath,
+    );
+    if (idx !== -1) {
+      const entry = candidates[idx];
+      consumed.add(entry);
+      return entry;
+    }
+
+    idx = candidates.findIndex(
+      (e) => !consumed.has(e) && !this.hasDupSuffix(e.entryPath),
+    );
+    if (idx !== -1) {
+      const entry = candidates[idx];
+      consumed.add(entry);
+      return entry;
+    }
+
+    const fallback = candidates.find((e) => !consumed.has(e));
+    if (fallback) {
+      consumed.add(fallback);
+      return fallback;
+    }
+
+    return null;
+  }
+
+  /**
+   * Incrementally merge a parsed conversation into the DB.
+   *
+   * Conversation.updatedAt acts as a watermark: messages with createdAt
+   * <= the stored updatedAt are already imported and are skipped; only
+   * newer messages get appended. Duplicate ids inside a single nested
+   * create are dropped, since SQLite silently loses one row in that case
+   * and the missing row would break attachment foreign keys.
+   *
+   * Returns the ids of messages actually written in this call. Callers
+   * must only attach files to these messages: their parent rows are
+   * guaranteed to exist, so attachment foreign keys can't fail.
+   */
+  private async upsertConversation(
+    conversation: Conversation,
+  ): Promise<string[]> {
     const existing = await this.prisma.conversation.findUnique({
       where: { id: conversation.id },
       select: { updatedAt: true },
     });
-
     const jsonUpdatedAt = new Date(conversation.updatedAt).getTime();
 
+    // Deduplicate by id: a repeated id inside a single nested create makes
+    // SQLite silently drop one row, which then breaks attachment FKs.
+    const seen = new Set<string>();
+    const uniqueMessages = conversation.messages.filter((m) => {
+      if (seen.has(m.id)) {
+        this.logger.warn(
+          `Dropping duplicate message id ${m.id} in conversation ${conversation.id}`,
+        );
+        return false;
+      }
+      seen.add(m.id);
+      return true;
+    });
+
+    // Already up to date: nothing written, so no attachments should be added.
     if (existing && existing.updatedAt.getTime() >= jsonUpdatedAt) {
-      return;
+      return [];
     }
 
     if (!existing) {
@@ -400,7 +781,7 @@ export class ConversationService {
           createdAt: new Date(conversation.createdAt),
           updatedAt: new Date(conversation.updatedAt),
           messages: {
-            create: conversation.messages.map((message) => ({
+            create: uniqueMessages.map((message) => ({
               id: message.id,
               role: message.role,
               content: message.content,
@@ -410,33 +791,28 @@ export class ConversationService {
           },
         },
       });
-      return;
+      return uniqueMessages.map((m) => m.id);
     }
 
+    await this.prisma.message.deleteMany({
+      where: { conversationId: conversation.id },
+    });
     await this.prisma.conversation.update({
       where: { id: conversation.id },
       data: {
         title: conversation.title,
         updatedAt: new Date(conversation.updatedAt),
+        messages: {
+          create: uniqueMessages.map((message) => ({
+            id: message.id,
+            role: message.role,
+            content: message.content,
+            createdAt: new Date(message.createdAt),
+            hidden: false,
+          })),
+        },
       },
     });
-
-    const dbUpdatedAt = existing.updatedAt.getTime();
-    const newMessages = conversation.messages.filter(
-      (message) => new Date(message.createdAt).getTime() > dbUpdatedAt,
-    );
-
-    if (newMessages.length > 0) {
-      await this.prisma.message.createMany({
-        data: newMessages.map((message) => ({
-          id: message.id,
-          role: message.role,
-          content: message.content,
-          createdAt: new Date(message.createdAt),
-          hidden: false,
-          conversationId: conversation.id,
-        })),
-      });
-    }
+    return uniqueMessages.map((m) => m.id);
   }
 }
