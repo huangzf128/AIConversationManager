@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import './MainContent.css';
-import { ChevronIcon, EyeIcon } from './Icons';
+import { ChevronIcon, EyeIcon, PaperclipIcon } from './Icons';
 import ToggleSwitch from './ToggleSwitch.js';
 import type { ConversationDetail } from '../pages/MyPage';
 import { attachmentDownloadUrl } from '../common/api.js';
@@ -15,7 +15,7 @@ const HTML_PLATFORMS = new Set(['gemini']);
 marked.setOptions({ gfm: true, breaks: true });
 
 function toAssistantHtml(content: string, platform: string): string {
-  const html = HTML_PLATFORMS.has(platform) ? content : marked.parse(content) as string;
+  const html = HTML_PLATFORMS.has(platform) ? content : (marked.parse(content) as string);
   // Content comes from uploaded export files, so treat it as untrusted.
   return DOMPurify.sanitize(html);
 }
@@ -30,7 +30,7 @@ const PLATFORM_URLS: Record<string, (id: string) => string> = {
   gemini: (id) => `https://gemini.google.com/app/${id}`,
   chatgpt: (id) => `https://chatgpt.com/c/${id}`,
   claude: (id) => `https://claude.ai/chat/${id}`,
-  deepseek: (id) => `https://chat.deepseek.com/chat/${id}`,
+  deepseek: (id) => `https://chat.deepseek.com/a/chat/s/${id}`,
 };
 
 function formatTime(iso: string) {
@@ -48,10 +48,8 @@ function MainContent({ conversation, loading, onToggleMessageHidden }: MainConte
   // Helper to check if attachment is an image based on file extension
   const isImageAttachment = (displayName: string): boolean => {
     const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg'];
-    return imageExtensions.some(ext => displayName.toLowerCase().endsWith(ext));
+    return imageExtensions.some((ext) => displayName.toLowerCase().endsWith(ext));
   };
-
-
 
   if (loading) {
     return (
@@ -105,10 +103,7 @@ function MainContent({ conversation, loading, onToggleMessageHidden }: MainConte
           <button type="button" onClick={expandAll}>
             Expand all
           </button>
-          <button
-            type="button"
-            onClick={collapseAll}
-          >
+          <button type="button" onClick={collapseAll}>
             Collapse all
           </button>
           <ToggleSwitch
@@ -132,10 +127,19 @@ function MainContent({ conversation, loading, onToggleMessageHidden }: MainConte
               ].join(' ')}
             >
               <div className="message-meta">
-                <button type="button" className="message-meta-toggle" onClick={() => toggleMessage(message.id)}>
+                <button
+                  type="button"
+                  className="message-meta-toggle"
+                  onClick={() => toggleMessage(message.id)}
+                >
                   <ChevronIcon open={!isCollapsed} />
                   <span className="message-role">{message.role}</span>
                   <span className="message-time">{formatTime(message.createdAt)}</span>
+                  {message.attachments && message.attachments.length > 0 && (
+                    <span className="message-attachment-icon">
+                      <PaperclipIcon />
+                    </span>
+                  )}
                 </button>
                 <span
                   className="icon-button"
@@ -144,7 +148,8 @@ function MainContent({ conversation, loading, onToggleMessageHidden }: MainConte
                   title={message.hidden ? 'Unhide message' : 'Hide message'}
                   onClick={() => onToggleMessageHidden(message.id, !message.hidden)}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') onToggleMessageHidden(message.id, !message.hidden);
+                    if (e.key === 'Enter' || e.key === ' ')
+                      onToggleMessageHidden(message.id, !message.hidden);
                   }}
                 >
                   <EyeIcon hidden={message.hidden} />
@@ -157,7 +162,9 @@ function MainContent({ conversation, loading, onToggleMessageHidden }: MainConte
                   // everything is sanitized before being injected.
                   <div
                     className="assistant-html"
-                    dangerouslySetInnerHTML={{ __html: toAssistantHtml(message.content, conversation.platform) }}
+                    dangerouslySetInnerHTML={{
+                      __html: toAssistantHtml(message.content, conversation.platform),
+                    }}
                   />
                 ) : (
                   <p className="message-text">{message.content}</p>
@@ -169,15 +176,21 @@ function MainContent({ conversation, loading, onToggleMessageHidden }: MainConte
                   <ul className="attachments-list">
                     {message.attachments.map((a) => (
                       <li key={a.id}>
-                        {isImageAttachment(a.displayName) ? (
-                          <img 
-                            src={attachmentDownloadUrl(a.id)} 
+                        {conversation.platform === 'deepseek' ? (
+                          <span className="attachment-name-only">{a.displayName}</span>
+                        ) : isImageAttachment(a.displayName) ? (
+                          <img
+                            src={attachmentDownloadUrl(a.id)}
                             alt={a.displayName}
                             className="attachment-image"
                             onClick={() => setPreviewImageUrl(attachmentDownloadUrl(a.id))}
                           />
                         ) : (
-                          <a href={attachmentDownloadUrl(a.id)} target="_blank" rel="noopener noreferrer">
+                          <a
+                            href={attachmentDownloadUrl(a.id)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
                             {a.displayName}
                           </a>
                         )}
@@ -192,14 +205,14 @@ function MainContent({ conversation, loading, onToggleMessageHidden }: MainConte
       </div>
 
       {/* Image Preview Modal */}
-       {previewImageUrl && (
-         <div className="image-modal" onClick={() => setPreviewImageUrl(null)}>
-           <button className="modal-close" onClick={() => setPreviewImageUrl(null)}>
-             ×
-           </button>
-           <img src={previewImageUrl} alt="Full size preview" className="modal-image" />
-         </div>
-       )}
+      {previewImageUrl && (
+        <div className="image-modal" onClick={() => setPreviewImageUrl(null)}>
+          <button className="modal-close" onClick={() => setPreviewImageUrl(null)}>
+            ×
+          </button>
+          <img src={previewImageUrl} alt="Full size preview" className="modal-image" />
+        </div>
+      )}
     </main>
   );
 }

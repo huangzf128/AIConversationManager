@@ -229,8 +229,102 @@ Expected export format: `conversations.json` from ChatGPT settings.
 
 ## Platform: DeepSeek
 
-**Not yet implemented.** The parser exists but returns an empty array.
-Expected export format: exported conversations JSON.
+### Export Source
+
+Settings → Download Data. Produces a `conversations.json` file (plain JSON,
+not a zip).
+
+### JSON Format
+
+A **flat array** of conversation objects. Messages are stored as a **tree**
+(same structure as ChatGPT) to support edit / regenerate branches:
+
+```jsonc
+[
+  {
+    "id": "9594303f-3319-4ec0-8767-c9e2725ac07b",
+    "title": "三国",
+    "inserted_at": "2025-01-29T15:55:28.250000+08:00",
+    "updated_at": "2025-01-29T15:55:28.250000+08:00",
+    "mapping": {
+      "root": {
+        "id": "root", "parent": null, "children": ["1"], "message": null
+      },
+      "1": {
+        "id": "1", "parent": "root", "children": ["2"],
+        "message": {
+          "model": "deepseek-reasoner",
+          "inserted_at": "2025-01-29T15:55:28.533000+08:00",
+          "fragments": [
+            { "type": "REQUEST", "content": "三国里，翼州是现在的什么地方" }
+          ]
+        }
+      },
+      "2": {
+        "id": "2", "parent": "1", "children": [],
+        "message": {
+          "model": "deepseek-reasoner",
+          "inserted_at": "2025-01-29T15:55:28.533000+08:00",
+          "fragments": [
+            { "type": "THINK", "content": "好的，用户问的是..." },
+            { "type": "RESPONSE", "content": "三国时期的冀州..." }
+          ]
+        }
+      }
+    }
+  }
+]
+```
+
+### Key Fields
+
+| Field | Description |
+|-------|-------------|
+| `id` | Conversation identifier (UUID) |
+| `title` | Conversation title |
+| `inserted_at` / `updated_at` | ISO 8601 timestamp with timezone offset |
+| `mapping` | Map of node-id → node object forming the message tree |
+| `mapping[id].message.fragments[]` | Array of typed content fragments |
+
+### Fragment Types
+
+| Type | Description |
+|------|-------------|
+| `REQUEST` | User prompt → `user` message |
+| `RESPONSE` | Assistant reply → `assistant` message body |
+| `THINK` | DeepSeek-R1 reasoning chain → wrapped in `-thinking` code block, prepended to RESPONSE |
+| `SEARCH` / `TOOL_SEARCH` | Web search results → formatted as numbered reference list, appended to assistant message |
+| `FILE` | Uploaded file metadata (no actual file content in export) → attachment record |
+| `TOOL_OPEN` | No useful content → silently skipped |
+
+### Message Tree Traversal
+
+Same tree structure as ChatGPT. The parser walks from root through
+`children[0]` to reconstruct the main conversation path. A single node
+may carry both REQUEST and RESPONSE fragments, which are split into
+separate user and assistant messages.
+
+### Timestamp Ordering
+
+DeepSeek's export often gives RESPONSE nodes timestamps a few milliseconds
+**earlier** than their REQUEST siblings. The parser corrects this with
+`ensureChronologicalOrder()` so the UI displays messages in the correct
+order.
+
+### Attachments
+
+DeepSeek's export only contains file metadata (`file_id`, `file_name`,
+`file_size`) — actual file content is **not included**. The import flow
+skips zip lookup and creates DB attachment records with `storagePath: ""`
+and `size: 0`. On the frontend, DeepSeek attachments render as
+non-clickable text to avoid 404 errors.
+
+### Message ID Scheme
+
+```
+{conversationId}-{nodeId}-user
+{conversationId}-{nodeId}-assistant
+```
 
 ---
 

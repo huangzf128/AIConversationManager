@@ -164,6 +164,12 @@
   margin-left: auto;
 }
 
+.message-attachment-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-muted);
+}
+
 .icon-chevron {
   flex-shrink: 0;
   color: var(--text-muted);
@@ -251,6 +257,17 @@
 .attachments-list li a:hover {
   background: rgba(79, 182, 166, 0.1);
   border-color: var(--accent);
+}
+
+.attachment-name-only {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
 }
 
 .attachment-image {

@@ -16,7 +16,12 @@ import type { Response } from 'express';
 import { ConversationService } from './conversation.service.js';
 import { AiPlatform } from '../common/interfaces/conversation.interface.js';
 
-const SUPPORTED_PLATFORMS: AiPlatform[] = ['chatgpt', 'gemini', 'claude', 'deepseek'];
+const SUPPORTED_PLATFORMS: AiPlatform[] = [
+  'chatgpt',
+  'gemini',
+  'claude',
+  'deepseek',
+];
 
 @Controller('conversations')
 export class ConversationController {
@@ -34,7 +39,10 @@ export class ConversationController {
 
     // Get the platform from the parent conversation to build the correct path
     const platform = attachment.message?.conversation?.platform || 'gemini';
-    const absolutePath = this.conversationService.resolveAttachmentPath(attachment.storagePath, platform);
+    const absolutePath = this.conversationService.resolveAttachmentPath(
+      attachment.storagePath,
+      platform,
+    );
     res.download(absolutePath, attachment.displayName);
   }
 
@@ -54,7 +62,10 @@ export class ConversationController {
   }
 
   @Patch(':id/messages/:messageId/hidden')
-  setMessageHidden(@Param('messageId') messageId: string, @Body('hidden') hidden: boolean) {
+  setMessageHidden(
+    @Param('messageId') messageId: string,
+    @Body('hidden') hidden: boolean,
+  ) {
     return this.conversationService.setMessageHidden(messageId, hidden);
   }
 
@@ -71,19 +82,30 @@ export class ConversationController {
 
     const resolvedPlatform = (platform ?? 'gemini') as AiPlatform;
     if (!SUPPORTED_PLATFORMS.includes(resolvedPlatform)) {
-      throw new BadRequestException(`Unsupported platform: ${resolvedPlatform}`);
+      throw new BadRequestException(
+        `Unsupported platform: ${resolvedPlatform}`,
+      );
     }
 
     const shouldSyncDelete = syncDelete === 'true';
 
     const isZip =
-      file.originalname.toLowerCase().endsWith('.zip') || file.mimetype === 'application/zip';
+      file.originalname.toLowerCase().endsWith('.zip') ||
+      file.mimetype === 'application/zip';
 
     if (isZip) {
-      return this.conversationService.importFromZip(resolvedPlatform, file.buffer, shouldSyncDelete);
+      return this.conversationService.importFromZip(
+        resolvedPlatform,
+        file.buffer,
+        shouldSyncDelete,
+      );
     }
 
     const rawFileContent = file.buffer.toString('utf-8');
-    return this.conversationService.importFromFile(resolvedPlatform, rawFileContent, shouldSyncDelete);
+    return this.conversationService.importFromFile(
+      resolvedPlatform,
+      rawFileContent,
+      shouldSyncDelete,
+    );
   }
 }

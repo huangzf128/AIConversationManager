@@ -71,8 +71,8 @@ Each platform has a different export format, handled by independent parsers that
 - [x] ZIP/JSON parsing and data storage (supports incremental sync)
     - [x] Gemini conversation history parsing and storage
     - [x] Claude conversation history parsing and storage
-    - [ ] ChatGPT conversation history parsing and storage (skeleton only, not implemented)
-    - [ ] DeepSeek conversation history parsing and storage (skeleton only, not implemented)
+    - [x] ChatGPT conversation history parsing and storage
+    - [x] DeepSeek conversation history parsing and storage
 - [x] Backend API fully implemented
     - [x] Get all conversation list (`GET /conversations`)
     - [x] Get single conversation details (`GET /conversations/:id`)

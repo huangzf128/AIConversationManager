@@ -242,6 +242,33 @@ export class ConversationService {
         if (!message.attachments?.length) continue;
 
         for (const attachment of message.attachments) {
+          if (platform === 'deepseek') {
+            try {
+              await this.prisma.attachment.upsert({
+                where: {
+                  messageId_contentHash: {
+                    messageId: message.id,
+                    contentHash: attachment.storedName,
+                  },
+                },
+                create: {
+                  messageId: message.id,
+                  displayName: attachment.displayName,
+                  storagePath: '',
+                  contentHash: attachment.storedName,
+                  size: 0,
+                },
+                update: {},
+              });
+            } catch (err) {
+              this.logger.error(
+                `Failed to save deepseek attachment [${attachment.displayName}] for message ${message.id}`,
+                err,
+              );
+            }
+            continue;
+          }
+
           const primaryPath =
             dir === '.' || dir === ''
               ? attachment.storedName
@@ -264,29 +291,37 @@ export class ConversationService {
             continue;
           }
 
-          const { storagePath, contentHash } =
-            await this.attachmentStorage.save(
-              match.data,
-              attachment.displayName,
-              conversation.platform,
-            );
+          try {
+            const attachmentData = match.getData();
+            const { storagePath, contentHash } =
+              await this.attachmentStorage.save(
+                attachmentData,
+                attachment.displayName,
+                conversation.platform,
+              );
 
-          await this.prisma.attachment.upsert({
-            where: {
-              messageId_contentHash: {
-                messageId: message.id,
-                contentHash,
+            await this.prisma.attachment.upsert({
+              where: {
+                messageId_contentHash: {
+                  messageId: message.id,
+                  contentHash,
+                },
               },
-            },
-            create: {
-              messageId: message.id,
-              displayName: attachment.displayName,
-              storagePath,
-              contentHash,
-              size: match.data.length,
-            },
-            update: {},
-          });
+              create: {
+                messageId: message.id,
+                displayName: attachment.displayName,
+                storagePath,
+                contentHash,
+                size: attachmentData.length,
+              },
+              update: {},
+            });
+          } catch (err) {
+            this.logger.error(
+              `Failed to save attachment [${attachment.displayName}] for message ${message.id} in conversation ${conversation.id}`,
+              err,
+            );
+          }
         }
       }
     }
@@ -398,10 +433,10 @@ export class ConversationService {
     zipBuffer: Buffer,
     prefix = '',
   ): {
-    allEntries: { entryPath: string; data: Buffer }[];
+    allEntries: { entryPath: string; getData: () => Buffer }[];
     jsonEntries: { entryPath: string; data: Buffer }[];
   } {
-    const allEntries: { entryPath: string; data: Buffer }[] = [];
+    const allEntries: { entryPath: string; getData: () => Buffer }[] = [];
     const jsonEntries: { entryPath: string; data: Buffer }[] = [];
 
     const zip = new AdmZip(zipBuffer);
@@ -412,22 +447,24 @@ export class ConversationService {
       const entryPath = prefix
         ? `${prefix}/${entry.entryName}`
         : entry.entryName;
-      const data = entry.getData();
       const lowerName = entry.entryName.toLowerCase();
 
       if (lowerName.endsWith('.zip')) {
+        const data = entry.getData();
         try {
           const inner = this.flattenZipEntries(data, entryPath);
           allEntries.push(...inner.allEntries);
           jsonEntries.push(...inner.jsonEntries);
         } catch {
-          allEntries.push({ entryPath, data });
+          allEntries.push({ entryPath, getData: () => data });
         }
+      } else if (lowerName.endsWith('.json')) {
+        const data = entry.getData();
+        allEntries.push({ entryPath, getData: () => data });
+        jsonEntries.push({ entryPath, data });
       } else {
-        allEntries.push({ entryPath, data });
-        if (lowerName.endsWith('.json')) {
-          jsonEntries.push({ entryPath, data });
-        }
+        const ref = entry;
+        allEntries.push({ entryPath, getData: () => ref.getData() });
       }
     }
 
@@ -631,10 +668,10 @@ export class ConversationService {
    * not stored next to the json that references it.
    */
   private findEntryByBasename(
-    fuzzyEntryMap: Map<string, { entryPath: string; data: Buffer }[]>,
-    consumed: Set<{ entryPath: string; data: Buffer }>,
+    fuzzyEntryMap: Map<string, { entryPath: string; getData: () => Buffer }[]>,
+    consumed: Set<{ entryPath: string; getData: () => Buffer }>,
     storedName: string,
-  ): { entryPath: string; data: Buffer } | null {
+  ): { entryPath: string; getData: () => Buffer } | null {
     const targetBase = path.basename(storedName).toLowerCase();
     const targetNoExt = targetBase.replace(/\.[^.]+$/, '');
 
@@ -655,13 +692,16 @@ export class ConversationService {
   }
 
   private buildFuzzyEntryMapFromEntries(
-    entries: { entryPath: string; data: Buffer }[],
+    entries: { entryPath: string; getData: () => Buffer }[],
   ): {
-    fuzzyEntryMap: Map<string, { entryPath: string; data: Buffer }[]>;
-    consumed: Set<{ entryPath: string; data: Buffer }>;
+    fuzzyEntryMap: Map<string, { entryPath: string; getData: () => Buffer }[]>;
+    consumed: Set<{ entryPath: string; getData: () => Buffer }>;
   } {
-    const map = new Map<string, { entryPath: string; data: Buffer }[]>();
-    const consumed = new Set<{ entryPath: string; data: Buffer }>();
+    const map = new Map<
+      string,
+      { entryPath: string; getData: () => Buffer }[]
+    >();
+    const consumed = new Set<{ entryPath: string; getData: () => Buffer }>();
 
     for (const entry of entries) {
       const fuzzyKey = this.toFuzzyPrefix(entry.entryPath);
@@ -696,10 +736,10 @@ export class ConversationService {
   }
 
   private findEntry(
-    fuzzyEntryMap: Map<string, { entryPath: string; data: Buffer }[]>,
-    consumed: Set<{ entryPath: string; data: Buffer }>,
+    fuzzyEntryMap: Map<string, { entryPath: string; getData: () => Buffer }[]>,
+    consumed: Set<{ entryPath: string; getData: () => Buffer }>,
     entryPath: string,
-  ): { entryPath: string; data: Buffer } | null {
+  ): { entryPath: string; getData: () => Buffer } | null {
     const prefix = this.toFuzzyPrefix(entryPath);
     const candidates = fuzzyEntryMap.get(prefix);
     if (!candidates) return null;
