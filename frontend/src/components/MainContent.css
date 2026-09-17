@@ -170,6 +170,38 @@
   color: var(--text-muted);
 }
 
+.branch-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.branch-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.branch-btn:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.branch-label {
+  padding: 0 2px;
+  min-width: 24px;
+  text-align: center;
+}
+
 .icon-chevron {
   flex-shrink: 0;
   color: var(--text-muted);

@@ -6,7 +6,8 @@ export interface ConversationMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
   createdAt: string;
-  hidden?: boolean; // manually hidden by the user, not part of the raw export
+  hidden?: boolean;
+  parentMessageId?: string;
   attachments?: ConversationAttachment[];
 }
 

@@ -126,69 +126,88 @@ export class DeepseekParser implements ConversationParser {
   }
 
   /**
-   * DeepSeek stores messages as a tree (same structure as ChatGPT).
-   * Walk from the leaf back up through `parent` to reconstruct the path
-   * of the currently selected branch, then convert each node into
-   * ConversationMessage(s).
+   * DeepSeek stores messages as a tree. When the user edits or regenerates
+   * a message, a new branch is created under the same parent node.
    *
-   * A single node can carry multiple fragments (REQUEST, THINK, RESPONSE,
-   * SEARCH, FILE, TOOL_*). We split REQUEST into a user message and
-   * THINK+RESPONSE into an assistant message. SEARCH and TOOL fragments
-   * are appended to the preceding assistant message when present.
+   * We walk ALL nodes (BFS from root) so every branch is included.
+   * Each message gets a `parentMessageId` pointing to the preceding
+   * message in the tree, allowing the frontend to reconstruct the tree
+   * and render branch switchers.
+   *
+   * Message ids use `conversationId-nodeId-parentNodeId-role` so that
+   * messages from different branches under the same parent are unique.
    */
   private walkTree(raw: DeepseekConversation): ConversationMessage[] {
     const mapping = raw.mapping;
     if (!mapping) return [];
 
-    const path = this.resolvePath(mapping);
+    const root = this.findRoot(mapping);
+    if (!root) return [];
 
+    const allNodeIds = this.bfsAllNodes(mapping, root);
+
+    const nodeLastMessageId = new Map<string, string>();
     const messages: ConversationMessage[] = [];
-    let pendingAssistant: ConversationMessage | null = null;
 
-    const flushAssistant = () => {
-      if (pendingAssistant) {
-        messages.push(pendingAssistant);
-        pendingAssistant = null;
-      }
-    };
-
-    for (const nodeId of path) {
+    for (const nodeId of allNodeIds) {
       const node = mapping[nodeId];
-      if (!node?.message?.fragments?.length) continue;
+      if (!node) continue;
+
+      const parentNodeId = node.parent ?? 'root';
+      const parentLastId =
+        parentNodeId !== 'root'
+          ? nodeLastMessageId.get(parentNodeId)
+          : undefined;
+
+      if (!node.message?.fragments?.length) {
+        if (parentLastId) nodeLastMessageId.set(nodeId, parentLastId);
+        continue;
+      }
 
       const { userMsg, assistantMsg } = this.extractMessages(
         raw.id!,
         nodeId,
+        parentNodeId,
         node.message,
       );
 
       if (userMsg) {
-        flushAssistant();
+        userMsg.parentMessageId = parentLastId;
         messages.push(userMsg);
+        nodeLastMessageId.set(nodeId, userMsg.id);
       }
 
       if (assistantMsg) {
-        if (pendingAssistant) {
-          const merged = [pendingAssistant.content, assistantMsg.content]
-            .filter((s) => s && s.trim())
-            .join('\n\n');
-          pendingAssistant.content = merged;
-          if (assistantMsg.attachments?.length) {
-            pendingAssistant.attachments = [
-              ...(pendingAssistant.attachments ?? []),
-              ...assistantMsg.attachments,
-            ];
-          }
-          pendingAssistant.id = assistantMsg.id;
-        } else {
-          pendingAssistant = assistantMsg;
-        }
+        assistantMsg.parentMessageId = userMsg?.id ?? parentLastId;
+        messages.push(assistantMsg);
+        nodeLastMessageId.set(nodeId, assistantMsg.id);
       }
     }
 
-    flushAssistant();
     this.ensureChronologicalOrder(messages);
     return messages;
+  }
+
+  private bfsAllNodes(
+    mapping: Record<string, DeepseekMappingNode>,
+    root: string,
+  ): string[] {
+    const order: string[] = [];
+    const visited = new Set<string>();
+    const queue: string[] = [root];
+
+    while (queue.length > 0) {
+      const nodeId = queue.shift()!;
+      if (visited.has(nodeId)) continue;
+      visited.add(nodeId);
+      order.push(nodeId);
+
+      for (const childId of mapping[nodeId]?.children ?? []) {
+        if (!visited.has(childId)) queue.push(childId);
+      }
+    }
+
+    return order;
   }
 
   /**
@@ -219,6 +238,7 @@ export class DeepseekParser implements ConversationParser {
   private extractMessages(
     conversationId: string,
     nodeId: string,
+    parentNodeId: string,
     message: DeepseekMessage,
   ): {
     userMsg: ConversationMessage | null;
@@ -278,7 +298,7 @@ export class DeepseekParser implements ConversationParser {
     let userMsg: ConversationMessage | null = null;
     if (userContent.trim() || userAttachments.length > 0) {
       userMsg = {
-        id: `${conversationId}-${nodeId}-user`,
+        id: `${conversationId}-${nodeId}-${parentNodeId}-user`,
         role: 'user',
         content: userContent,
         createdAt: time,
@@ -301,7 +321,7 @@ export class DeepseekParser implements ConversationParser {
     const assistantText = assistantParts.join('\n\n');
     if (assistantText.trim()) {
       assistantMsg = {
-        id: `${conversationId}-${nodeId}-assistant`,
+        id: `${conversationId}-${nodeId}-${parentNodeId}-assistant`,
         role: 'assistant',
         content: assistantText,
         createdAt: time,
@@ -309,30 +329,6 @@ export class DeepseekParser implements ConversationParser {
     }
 
     return { userMsg, assistantMsg };
-  }
-
-  /**
-   * Resolve the path from root to the deepest leaf by following the tree
-   * structure. DeepSeek exports don't have a `current_node` field, so we
-   * walk from the root down through children (taking the first child at
-   * each branch, which represents the main conversation path).
-   */
-  private resolvePath(mapping: Record<string, DeepseekMappingNode>): string[] {
-    const root = this.findRoot(mapping);
-    if (!root) return [];
-
-    const path: string[] = [];
-    const visited = new Set<string>();
-    let nodeId: string | null | undefined = root;
-
-    while (nodeId && mapping[nodeId] && !visited.has(nodeId)) {
-      visited.add(nodeId);
-      path.push(nodeId);
-      const children: string[] = mapping[nodeId].children ?? [];
-      nodeId = children.length > 0 ? children[0] : null;
-    }
-
-    return path;
   }
 
   private findRoot(

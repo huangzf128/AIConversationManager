@@ -25,6 +25,7 @@ export interface MessageItem {
   content: string;
   createdAt: string;
   hidden: boolean;
+  parentMessageId: string | null;
   attachments: AttachmentItem[];
 }
 
@@ -112,7 +113,9 @@ function MyPage() {
       body: JSON.stringify({ hidden }),
     }).catch(() => {
       setConversations((prev) => prev.map((c) => (c.id === id ? { ...c, hidden: !hidden } : c)));
-      setDetailsCache((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], hidden: !hidden } } : prev));
+      setDetailsCache((prev) =>
+        prev[id] ? { ...prev, [id]: { ...prev[id], hidden: !hidden } } : prev,
+      );
     });
   };
 
@@ -156,7 +159,9 @@ function MyPage() {
           ...prev,
           [selectedId]: {
             ...current,
-            messages: current.messages.map((m) => (m.id === messageId ? { ...m, hidden: !hidden } : m)),
+            messages: current.messages.map((m) =>
+              m.id === messageId ? { ...m, hidden: !hidden } : m,
+            ),
           },
         };
       });
