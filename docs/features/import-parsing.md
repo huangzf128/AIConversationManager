@@ -34,14 +34,18 @@ When a `.zip` is uploaded:
 
 ## DB Sync Strategy
 
-Gemini conversations are **append-only**: messages cannot be edited or
-deleted, only added. The import logic exploits this:
+All platforms use an **append-only** model: existing messages are never
+deleted or recreated, only new ones are appended. This mirrors Gemini's
+append-only nature but now applies universally — user-controlled state
+(such as `hidden`) on existing messages survives re-imports untouched.
+
+The import logic uses `conversation.updatedAt` as a watermark:
 
 | Condition | Action |
 |-----------|--------|
 | `json.updatedAt <= db.updatedAt` | Skip entirely — nothing new |
 | `!existing` in DB | `create` conversation + nested `messages.create` |
-| `json.updatedAt > db.updatedAt` | Update `title`/`updatedAt` on conversation; only `createMany` messages whose `createdAt > db.updatedAt` |
+| `json.updatedAt > db.updatedAt` | Update `title`/`updatedAt` on conversation; only `create` messages whose `createdAt > db.updatedAt` |
 
 User-controlled fields (`starred`, `hidden` on conversations; `hidden` on
 messages) are **never overwritten** by import, so manual choices survive

@@ -776,9 +776,12 @@ export class ConversationService {
    *
    * Conversation.updatedAt acts as a watermark: messages with createdAt
    * <= the stored updatedAt are already imported and are skipped; only
-   * newer messages get appended. Duplicate ids inside a single nested
-   * create are dropped, since SQLite silently loses one row in that case
-   * and the missing row would break attachment foreign keys.
+   * newer messages get appended. This mirrors Gemini's append-only model
+   * (see docs/features/db-sync.md) but now applies to every platform:
+   * existing messages are never deleted or recreated, so hidden state on
+   * them survives re-imports untouched. Duplicate ids inside a single
+   * nested create are dropped, since SQLite silently loses one row in
+   * that case and the missing row would break attachment foreign keys.
    *
    * Returns the ids of messages actually written in this call. Callers
    * must only attach files to these messages: their parent rows are
@@ -807,11 +810,6 @@ export class ConversationService {
       return true;
     });
 
-    // Already up to date: nothing written, so no attachments should be added.
-    if (existing && existing.updatedAt.getTime() >= jsonUpdatedAt) {
-      return [];
-    }
-
     if (!existing) {
       await this.prisma.conversation.create({
         data: {
@@ -834,16 +832,26 @@ export class ConversationService {
       return uniqueMessages.map((m) => m.id);
     }
 
-    await this.prisma.message.deleteMany({
-      where: { conversationId: conversation.id },
-    });
+    // Already up to date: nothing new to append.
+    if (existing.updatedAt.getTime() >= jsonUpdatedAt) {
+      return [];
+    }
+
+    // Append-only: only messages strictly newer than the stored watermark
+    // are new. This never touches existing message rows, so hidden state
+    // set by the user is preserved automatically.
+    const existingWatermark = existing.updatedAt.getTime();
+    const newMessages = uniqueMessages.filter(
+      (m) => new Date(m.createdAt).getTime() > existingWatermark,
+    );
+
     await this.prisma.conversation.update({
       where: { id: conversation.id },
       data: {
         title: conversation.title,
         updatedAt: new Date(conversation.updatedAt),
         messages: {
-          create: uniqueMessages.map((message) => ({
+          create: newMessages.map((message) => ({
             id: message.id,
             role: message.role,
             content: message.content,
@@ -853,6 +861,6 @@ export class ConversationService {
         },
       },
     });
-    return uniqueMessages.map((m) => m.id);
+    return newMessages.map((m) => m.id);
   }
 }
