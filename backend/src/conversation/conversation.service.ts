@@ -22,7 +22,7 @@ import {
   buildFuzzyFileMap,
   findFile,
   findFileByBasename,
-} from './zip-utils.js';
+} from './utils/zip-utils.js';
 
 @Injectable()
 export class ConversationService {

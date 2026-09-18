@@ -5,7 +5,7 @@ import {
   ConversationMessage,
   ConversationAttachment,
 } from '../../common/interfaces/conversation.interface.js';
-import { splitJsonArrayFile } from '../streaming-json-splitter.js';
+import { splitJsonArrayFile } from '../utils/streaming-json-splitter.js';
 
 interface ChatGptAuthor {
   role?: string;

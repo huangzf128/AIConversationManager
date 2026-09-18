@@ -5,136 +5,137 @@
 ```
 conversation/
 ├── chatgpt/
-│   ├── chatgpt.importer.ts      # ZIP 导入逻辑（过滤、library_files、DALL·E 附件）
-│   ├── chatgpt.parser.ts        # JSON 解析（parse / parseOne / parseReadStream）
+│   ├── chatgpt.importer.ts      # ZIP import logic (filtering, library_files, DALL·E attachments)
+│   ├── chatgpt.parser.ts        # JSON parsing (parse / parseOne / parseReadStream)
 │   └── chatgpt.parser.spec.ts
 ├── claude/
 │   ├── claude.importer.ts
 │   └── claude.parser.ts
 ├── deepseek/
 │   ├── deepseek.importer.ts
-│   └── deepseek.parser.ts       # parseStream（字符串扫描）+ parseReadStream（文件流）
+│   └── deepseek.parser.ts       # parseStream (string scanning) + parseReadStream (file stream)
 ├── gemini/
 │   ├── gemini.importer.ts
 │   └── gemini.parser.ts
-├── streaming-json-splitter.ts   # 共享：流式 JSON 数组分割状态机
-├── zip-utils.ts                 # ZIP 解压、模糊匹配索引
-├── conversation.service.ts      # 通用导入流程（解压 → 解析 → 入库 → 附件）
+├── utils/
+│   ├── streaming-json-splitter.ts   # Streaming JSON array splitting state machine
+│   └── zip-utils.ts                 # ZIP extraction, fuzzy matching index
+├── conversation.service.ts      # General import flow (extract → parse → persist → attachments)
 └── conversation.module.ts
 ```
 
 ## Import Flow
 
 ```
-用户上传 zip
+User uploads zip
     │
     ▼
 conversation.service.importFromZip(platform, zipBuffer)
     │
     ├─ 1. extractZipToTempDir(zipBuffer, filters)
-    │     ├─ adm-zip 解压到临时目录
-    │     ├─ expandNestedZips()          ← shouldExpandZip 过滤
-    │     └─ collectFiles()              ← shouldParseJson 过滤
-    │     返回: { tempDir, allFiles[], jsonFiles[] }
+    │     ├─ adm-zip extracts to temp directory
+    │     ├─ expandNestedZips()          ← shouldExpandZip filter
+    │     └─ collectFiles()              ← shouldParseJson filter
+    │     Returns: { tempDir, allFiles[], jsonFiles[] }
     │
-    ├─ 2. buildFuzzyFileMap(allFiles)    # 附件模糊匹配索引
+    ├─ 2. buildFuzzyFileMap(allFiles)    # Fuzzy matching index for attachments
     │
     ├─ 3. for await (parsed of importer.parseZipEntries(jsonFiles))
     │     │
-    │     ├─ upsertConversation()        # 增量合并入库
+    │     ├─ upsertConversation()        # Incremental merge & persist
     │     │
-    │     └─ 附件处理（通用）
-    │         ├─ findFile()              # 模糊匹配查找附件
-    │         ├─ fs.readFileSync()       # 从磁盘读取附件
+    │     └─ Attachment handling (generic)
+    │         ├─ findFile()              # Fuzzy-match attachment lookup
+    │         ├─ fs.readFileSync()       # Read attachment from disk
     │         └─ attachmentStorage.save()
     │
-    ├─ 4. syncDelete（可选）             # 删除 zip 中不存在的 conversation
+    ├─ 4. syncDelete (optional)          # Delete conversations not present in zip
     │
-    └─ 5. rmSync(tempDir)               # 清理临时目录
+    └─ 5. rmSync(tempDir)               # Clean up temp directory
 ```
 
 ## PlatformImporter Interface
 
 ```typescript
 interface PlatformImporter {
-  shouldExpandZip?(entryPath: string): boolean;   // 哪些嵌套 zip 需要展开
-  shouldParseJson?(entryPath: string): boolean;   // 哪些 json 需要解析
-  parseZipEntries(jsonFiles: JsonFileEntry[]):     // 解析 json → yield conversation
+  shouldExpandZip?(entryPath: string): boolean;   // Which nested zips to expand
+  shouldParseJson?(entryPath: string): boolean;   // Which json files to parse
+  parseZipEntries(jsonFiles: JsonFileEntry[]):     // Parse json → yield conversation
     Iterable<ParsedConversation> | AsyncIterable<ParsedConversation>;
 }
 ```
 
-| 方法 | 作用 | 默认行为（未实现时） |
-|------|------|---------------------|
-| `shouldExpandZip` | 过滤嵌套 zip，避免展开无关 zip | 展开所有 zip |
-| `shouldParseJson` | 过滤 json 文件，避免解析无关 json | 解析所有 json |
-| `parseZipEntries` | 逐个 yield ParsedConversation | （必须实现） |
+| Method | Purpose | Default (when not implemented) |
+|--------|---------|-------------------------------|
+| `shouldExpandZip` | Filter nested zips to avoid expanding irrelevant ones | Expand all zips |
+| `shouldParseJson` | Filter json files to avoid parsing irrelevant ones | Parse all json |
+| `parseZipEntries` | Yield ParsedConversation one by one | (Must implement) |
 
 ## Platform Filters
 
 | Platform | shouldExpandZip | shouldParseJson |
 |----------|----------------|-----------------|
 | **ChatGPT** | `Conversations__*.zip` | `conversations-*.json` + `library_files.json` |
-| **Gemini** | 路径含 `gemini` 或 `bard` | 路径含 `gemini` 或 `bard` |
-| **DeepSeek** | 全部展开 | 仅 `conversations.json` |
-| **Claude** | 全部展开 | 全部解析 |
+| **Gemini** | Path contains `gemini` or `bard` | Path contains `gemini` or `bard` |
+| **DeepSeek** | Expand all | Only `conversations.json` |
+| **Claude** | Expand all | Parse all |
 
 ## Streaming JSON Parsing
 
-### 架构
+### Architecture
 
 ```
 fs.createReadStream(filePath, { highWaterMark: 64KB })
-    │  逐 chunk（64KB）
+    │  chunk by chunk (64KB)
     ▼
 StreamingJsonArraySplitter.feed(chunk)
-    │  状态机跟踪括号深度，产出完整 JSON item 字符串
+    │  State machine tracks bracket depth, emits complete JSON item strings
     ▼
 JSON.parse(itemJson)
-    │  单个 conversation 对象
+    │  Single conversation object
     ▼
 yield conversation
 ```
 
-### StreamingJsonArraySplitter 状态机
+### StreamingJsonArraySplitter State Machine
 
-逐 chunk 喂入，跟踪 JSON 数组的括号深度：
+Chunks are fed one at a time; the state machine tracks JSON array bracket depth:
 
-- `depth === 0`：数组外部（跳过 `[` 后进入 depth 1）
-- `depth === 1`：数组顶层，遇到 `{` 标记 itemStart
-- `depth > 1`：item 内部，遇到 `}` 且回到 depth 1 时 yield 完整 item
-- 同时处理字符串转义（`\"`、`\\`），避免字符串内的括号干扰
+- `depth === 0`: Outside the array (skip `[`, then enter depth 1)
+- `depth === 1`: At array top level; mark `itemStart` when `{` is encountered
+- `depth > 1`: Inside an item; when `}` brings depth back to 1, yield the complete item
+- String escapes (`\"`, `\\`) are handled to avoid brackets inside strings interfering
 
-### 各平台 Stream 状态
+### Stream Status per Platform
 
-| Platform | JSON 读取 | 解析方式 | 说明 |
-|----------|-----------|---------|------|
-| **DeepSeek** | `createReadStream` ✅ | 状态机逐 chunk ✅ | 真正 stream，单 conversation 粒度 |
-| **ChatGPT** | `createReadStream` ✅ | 状态机逐 chunk ✅ | 真正 stream，单 conversation 粒度 |
-| **Gemini** | `readFileSync` | 全量解析 | 需要按 chatId 分组，无法逐个 stream |
-| **Claude** | `readFileSync` | 全量解析 | 文件通常不大 |
+| Platform | JSON Read | Parse Method | Notes |
+|----------|-----------|-------------|-------|
+| **DeepSeek** | `createReadStream` ✅ | State machine per chunk ✅ | True streaming, single conversation granularity |
+| **ChatGPT** | `createReadStream` ✅ | State machine per chunk ✅ | True streaming, single conversation granularity |
+| **Gemini** | `readFileSync` | Full parse | Requires grouping by chatId; cannot stream per item |
+| **Claude** | `readFileSync` | Full parse | Files are typically small |
 
-### 为什么 Gemini 不能 stream？
+### Why can't Gemini stream?
 
-Gemini Takeout 的 JSON 不是"一个 item = 一个 conversation"。
-每条 record 是一条消息片段，需要按 `chatId` 分组后才能组装成 conversation。
-所以必须看到所有 record 才能分组，无法逐个 yield。
+Gemini Takeout JSON is not "one item = one conversation".
+Each record is a message fragment that must be grouped by `chatId` before assembling into a conversation.
+All records must be seen before grouping is possible, so per-item yielding is not feasible.
 
 ## Fuzzy File Matching
 
-Google Takeout 导出的 zip 中，附件文件名可能带 `(1)` 后缀（重复下载时自动添加）。
-`buildFuzzyFileMap` 为每个文件生成两个索引 key：
+In Google Takeout exports, attachment filenames may carry a `(1)` suffix (auto-added on repeated downloads).
+`buildFuzzyFileMap` generates two index keys for each file:
 
-- **fuzzyKey**：去掉扩展名和 `(数字)` 后缀 → `conversations/abc123`
-- **fullKey**：只去掉 `(数字)` 后缀 → `conversations/abc123.dat`
+- **fuzzyKey**: Strip extension and `(digit)` suffix → `conversations/abc123`
+- **fullKey**: Strip only `(digit)` suffix → `conversations/abc123.dat`
 
-查找顺序：
-1. 精确路径匹配
-2. 去掉 `(数字)` 后缀匹配
-3. 任意未消费候选匹配
-4. 按 basename 再找一轮（`findFileByBasename`）
+Lookup order:
+1. Exact path match
+2. Match after stripping `(digit)` suffix
+3. Any unconsumed candidate match
+4. Fallback by basename (`findFileByBasename`)
 
-匹配到的文件标记为 consumed，防止重复匹配。
+Matched files are marked as consumed to prevent duplicate matching.
 
 ## ZIP Structure Examples
 
@@ -153,9 +154,9 @@ OpenAI-export/
 ### Gemini
 ```
 Takeout/
-└── マイ アクティビティ/
-    ├── Gemini アプリ/               ← shouldExpandZip/shouldParseJson: ✅
-    │   ├── マイアクティビティ.json
+└── My Activity/
+    ├── Gemini Apps/                 ← shouldExpandZip/shouldParseJson: ✅
+    │   ├── MyActivity.json
     │   └── attachments/
     ├── Search/                      ← shouldExpandZip/shouldParseJson: ❌
     └── ...

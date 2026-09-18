@@ -10,9 +10,8 @@ import { GeminiParser } from './gemini.parser.js';
 
 @Injectable()
 export class GeminiImporter implements PlatformImporter {
-  shouldExpandZip(entryPath: string): boolean {
-    const segments = entryPath.toLowerCase().split(/[/\\]/);
-    return segments.some((s) => s.includes('gemini') || s.includes('bard'));
+  shouldExpandZip(_entryPath: string): boolean {
+    return false;
   }
 
   shouldParseJson(entryPath: string): boolean {

@@ -11,7 +11,7 @@ import {
   ConversationMessage,
 } from '../../common/interfaces/conversation.interface.js';
 import { ChatgptParser } from './chatgpt.parser.js';
-import { splitJsonArrayFile } from '../streaming-json-splitter.js';
+import { splitJsonArrayFile } from '../utils/streaming-json-splitter.js';
 
 interface LibraryFileEntry {
   fileId: string;
