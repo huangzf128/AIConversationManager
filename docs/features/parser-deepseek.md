@@ -163,6 +163,23 @@ can see what files were uploaded in the original conversation.
 
 Carries no useful content. Silently skipped by the parser.
 
+## Stream Parsing
+
+DeepSeek exports can be large (20+ MB). To avoid creating a single huge
+V8 object graph via `JSON.parse`, the parser provides a `parseStream()`
+generator that yields one `Conversation` at a time.
+
+Internally, `splitJsonArrayItems()` scans the raw JSON string character
+by character, tracking brace/bracket depth and string boundaries to find
+top-level array element boundaries. Each element substring is then
+`JSON.parse`-d individually. This keeps peak memory proportional to the
+largest single chat rather than the entire file.
+
+Both `importFromFile` (`.json` upload) and `importFromZip` (`.zip`
+upload) use `parseStream` for DeepSeek, persisting each conversation
+immediately via `upsertConversation` before moving to the next. Only one
+chat object lives in memory at a time.
+
 ## Message Tree Traversal
 
 DeepSeek uses the same tree structure as ChatGPT to support message

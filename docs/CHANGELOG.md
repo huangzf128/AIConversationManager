@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+* DeepSeek import now uses stream parsing: the JSON array is scanned for
+  element boundaries and each conversation is parsed and persisted
+  individually, keeping only one chat object in memory at a time. This
+  significantly reduces peak heap usage for large exports (20+ MB).
+* `syncDeleteMissing` now accepts `Set<string>` instead of `Conversation[]`,
+  avoiding temporary placeholder objects.
+* BFS traversal in DeepSeek parser uses a head pointer instead of
+  `Array.shift()` for O(1) dequeue.
+
 ## [1.0.0] - 2026-09-16
 
 ### Added

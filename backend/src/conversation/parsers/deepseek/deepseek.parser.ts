@@ -77,21 +77,42 @@ interface DeepseekConversation {
 @Injectable()
 export class DeepseekParser implements ConversationParser {
   parse(rawFileContent: string): Conversation[] {
-    let rawConversations: DeepseekConversation[];
-    try {
-      rawConversations = JSON.parse(rawFileContent) as DeepseekConversation[];
-    } catch {
-      console.log('DeepseekParser: failed to parse conversations JSON');
-      return [];
+    const conversations: Conversation[] = [];
+    for (const conversation of this.parseStream(rawFileContent)) {
+      conversations.push(conversation);
+    }
+    return conversations;
+  }
+
+  /**
+   * Stream-parse a DeepSeek export JSON array, yielding one Conversation
+   * at a time. Instead of JSON.parse-ing the entire file at once (which
+   * creates a huge V8 object graph for a 20+ MB file), we scan the raw
+   * string for top-level array element boundaries and parse each chat
+   * object individually. This keeps peak memory proportional to the
+   * largest single chat rather than the whole file.
+   */
+  *parseStream(rawFileContent: string): Generator<Conversation> {
+    const trimmed = rawFileContent.trim();
+    if (!trimmed.startsWith('[')) {
+      console.log('DeepseekParser: expected JSON array');
+      return;
     }
 
-    if (!Array.isArray(rawConversations)) return [];
-
-    const conversations: Conversation[] = [];
-    for (const raw of rawConversations) {
+    const items = splitJsonArrayItems(trimmed);
+    for (const itemJson of items) {
+      let raw: DeepseekConversation;
+      try {
+        raw = JSON.parse(itemJson) as DeepseekConversation;
+      } catch (err) {
+        console.log(
+          `DeepseekParser: skipping malformed item: ${(err as Error).message}`,
+        );
+        continue;
+      }
       try {
         const conversation = this.toConversation(raw);
-        if (conversation) conversations.push(conversation);
+        if (conversation) yield conversation;
       } catch (err) {
         console.log(
           `DeepseekParser: skipping conversation ${raw?.id ?? '<no-id>'}: ${
@@ -100,7 +121,6 @@ export class DeepseekParser implements ConversationParser {
         );
       }
     }
-    return conversations;
   }
 
   private toConversation(raw: DeepseekConversation): Conversation | null {
@@ -195,9 +215,10 @@ export class DeepseekParser implements ConversationParser {
     const order: string[] = [];
     const visited = new Set<string>();
     const queue: string[] = [root];
+    let head = 0;
 
-    while (queue.length > 0) {
-      const nodeId = queue.shift()!;
+    while (head < queue.length) {
+      const nodeId = queue[head++];
       if (visited.has(nodeId)) continue;
       visited.add(nodeId);
       order.push(nodeId);
@@ -356,5 +377,57 @@ export class DeepseekParser implements ConversationParser {
     return firstUserMessage
       ? firstUserMessage.content.slice(0, 60)
       : 'DeepSeek conversation';
+  }
+}
+
+/**
+ * Split a JSON array string into individual top-level element strings
+ * without parsing the whole array. Tracks brace/bracket depth and
+ * string boundaries so commas inside the outer brackets mark element
+ * boundaries. Yields one substring per element (still valid JSON on
+ * its own).
+ *
+ * The outer `[` and `]` are consumed without yielding; elements are
+ * the values at depth 1 (direct children of the top-level array).
+ */
+function* splitJsonArrayItems(json: string): Generator<string> {
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  let start = -1;
+
+  for (let i = 0; i < json.length; i++) {
+    const ch = json[i];
+
+    if (escape) {
+      escape = false;
+      continue;
+    }
+
+    if (inString) {
+      if (ch === '\\') escape = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (ch === '{' || ch === '[') {
+      if (depth === 1 && start < 0) start = i;
+      depth++;
+      continue;
+    }
+
+    if (ch === '}' || ch === ']') {
+      depth--;
+      if (depth === 1 && start >= 0) {
+        yield json.substring(start, i + 1);
+        start = -1;
+      }
+      continue;
+    }
   }
 }

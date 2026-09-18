@@ -108,6 +108,19 @@ export class ConversationService {
       throw new BadRequestException(`Unsupported platform: ${platform}`);
     }
 
+    if (
+      platform === 'deepseek' &&
+      'parseStream' in parser &&
+      typeof parser.parseStream === 'function'
+    ) {
+      return this.importFromFileStreamed(
+        platform,
+        parser as DeepseekParser,
+        rawFileContent,
+        syncDelete,
+      );
+    }
+
     const conversations = parser.parse(rawFileContent);
     for (const conversation of conversations) {
       await this.upsertConversation(conversation);
@@ -115,10 +128,39 @@ export class ConversationService {
 
     let deleted = 0;
     if (syncDelete) {
-      deleted = await this.syncDeleteMissing(platform, conversations);
+      const importedIds = new Set(conversations.map((c) => c.id));
+      deleted = await this.syncDeleteMissing(platform, importedIds);
     }
 
     return { imported: conversations.length, deleted };
+  }
+
+  /**
+   * Stream-based import for DeepSeek: parse and persist one conversation
+   * at a time so the V8 heap only holds a single chat object at any
+   * point, instead of the full parsed array.
+   */
+  private async importFromFileStreamed(
+    platform: AiPlatform,
+    parser: DeepseekParser,
+    rawFileContent: string,
+    syncDelete: boolean,
+  ) {
+    let imported = 0;
+    const importedIds = new Set<string>();
+
+    for (const conversation of parser.parseStream(rawFileContent)) {
+      await this.upsertConversation(conversation);
+      imported++;
+      importedIds.add(conversation.id);
+    }
+
+    let deleted = 0;
+    if (syncDelete) {
+      deleted = await this.syncDeleteMissing(platform, importedIds);
+    }
+
+    return { imported, deleted };
   }
 
   /**
@@ -138,6 +180,35 @@ export class ConversationService {
     const parser = this.parsers[platform];
     if (!parser) {
       throw new BadRequestException(`Unsupported platform: ${platform}`);
+    }
+
+    if (platform === 'deepseek') {
+      const { jsonEntries } = this.flattenZipEntries(zipBuffer);
+      const deepseekParser = parser as DeepseekParser;
+      let totalImported = 0;
+      const allImportedIds = new Set<string>();
+
+      for (const { data } of jsonEntries) {
+        let text: string;
+        try {
+          text = data.toString('utf-8');
+        } catch {
+          continue;
+        }
+
+        for (const conversation of deepseekParser.parseStream(text)) {
+          await this.upsertConversation(conversation);
+          totalImported++;
+          allImportedIds.add(conversation.id);
+        }
+      }
+
+      let deleted = 0;
+      if (syncDelete) {
+        deleted = await this.syncDeleteMissing(platform, allImportedIds);
+      }
+
+      return { imported: totalImported, deleted };
     }
 
     const { allEntries, jsonEntries } = this.flattenZipEntries(zipBuffer);
@@ -242,33 +313,6 @@ export class ConversationService {
         if (!message.attachments?.length) continue;
 
         for (const attachment of message.attachments) {
-          if (platform === 'deepseek') {
-            try {
-              await this.prisma.attachment.upsert({
-                where: {
-                  messageId_contentHash: {
-                    messageId: message.id,
-                    contentHash: attachment.storedName,
-                  },
-                },
-                create: {
-                  messageId: message.id,
-                  displayName: attachment.displayName,
-                  storagePath: '',
-                  contentHash: attachment.storedName,
-                  size: 0,
-                },
-                update: {},
-              });
-            } catch (err) {
-              this.logger.error(
-                `Failed to save deepseek attachment [${attachment.displayName}] for message ${message.id}`,
-                err,
-              );
-            }
-            continue;
-          }
-
           const primaryPath =
             dir === '.' || dir === ''
               ? attachment.storedName
@@ -328,7 +372,8 @@ export class ConversationService {
 
     let deleted = 0;
     if (syncDelete) {
-      deleted = await this.syncDeleteMissing(platform, conversations);
+      const importedIds = new Set(conversations.map((c) => c.id));
+      deleted = await this.syncDeleteMissing(platform, importedIds);
     }
 
     return { imported: conversations.length, deleted };
@@ -478,10 +523,8 @@ export class ConversationService {
    */
   private async syncDeleteMissing(
     platform: AiPlatform,
-    imported: Conversation[],
+    importedIds: Set<string>,
   ) {
-    const importedIds = new Set(imported.map((c) => c.id));
-
     const dbIds = await this.prisma.conversation.findMany({
       where: { platform, starred: false },
       select: { id: true },
