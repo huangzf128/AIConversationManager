@@ -1,10 +1,11 @@
 import { Injectable } from '@nestjs/common';
-import { ConversationParser } from '../../../common/interfaces/parser.interface.js';
+import { ConversationParser } from '../../common/interfaces/parser.interface.js';
 import {
   Conversation,
   ConversationMessage,
   ConversationAttachment,
-} from '../../../common/interfaces/conversation.interface.js';
+} from '../../common/interfaces/conversation.interface.js';
+import { splitJsonArrayFile } from '../streaming-json-splitter.js';
 
 interface DeepseekFragmentBase {
   type: string;
@@ -84,14 +85,6 @@ export class DeepseekParser implements ConversationParser {
     return conversations;
   }
 
-  /**
-   * Stream-parse a DeepSeek export JSON array, yielding one Conversation
-   * at a time. Instead of JSON.parse-ing the entire file at once (which
-   * creates a huge V8 object graph for a 20+ MB file), we scan the raw
-   * string for top-level array element boundaries and parse each chat
-   * object individually. This keeps peak memory proportional to the
-   * largest single chat rather than the whole file.
-   */
   *parseStream(rawFileContent: string): Generator<Conversation> {
     const trimmed = rawFileContent.trim();
     if (!trimmed.startsWith('[')) {
@@ -101,6 +94,30 @@ export class DeepseekParser implements ConversationParser {
 
     const items = splitJsonArrayItems(trimmed);
     for (const itemJson of items) {
+      let raw: DeepseekConversation;
+      try {
+        raw = JSON.parse(itemJson) as DeepseekConversation;
+      } catch (err) {
+        console.log(
+          `DeepseekParser: skipping malformed item: ${(err as Error).message}`,
+        );
+        continue;
+      }
+      try {
+        const conversation = this.toConversation(raw);
+        if (conversation) yield conversation;
+      } catch (err) {
+        console.log(
+          `DeepseekParser: skipping conversation ${raw?.id ?? '<no-id>'}: ${
+            (err as Error).message
+          }`,
+        );
+      }
+    }
+  }
+
+  async *parseReadStream(filePath: string): AsyncGenerator<Conversation> {
+    for await (const itemJson of splitJsonArrayFile(filePath)) {
       let raw: DeepseekConversation;
       try {
         raw = JSON.parse(itemJson) as DeepseekConversation;
@@ -145,18 +162,6 @@ export class DeepseekParser implements ConversationParser {
     };
   }
 
-  /**
-   * DeepSeek stores messages as a tree. When the user edits or regenerates
-   * a message, a new branch is created under the same parent node.
-   *
-   * We walk ALL nodes (BFS from root) so every branch is included.
-   * Each message gets a `parentMessageId` pointing to the preceding
-   * message in the tree, allowing the frontend to reconstruct the tree
-   * and render branch switchers.
-   *
-   * Message ids use `conversationId-nodeId-parentNodeId-role` so that
-   * messages from different branches under the same parent are unique.
-   */
   private walkTree(raw: DeepseekConversation): ConversationMessage[] {
     const mapping = raw.mapping;
     if (!mapping) return [];
@@ -231,15 +236,6 @@ export class DeepseekParser implements ConversationParser {
     return order;
   }
 
-  /**
-   * DeepSeek exports often give the REQUEST and RESPONSE nodes nearly
-   * identical `inserted_at` values, with the RESPONSE timestamp a few
-   * milliseconds *earlier* than the REQUEST timestamp. Since the UI
-   * sorts messages by `createdAt`, this would place the assistant reply
-   * before the user prompt. We walk the tree in the correct structural
-   * order, so we simply enforce that each message's createdAt is not
-   * earlier than the preceding message's.
-   */
   private ensureChronologicalOrder(messages: ConversationMessage[]): void {
     for (let i = 1; i < messages.length; i++) {
       if (messages[i].createdAt < messages[i - 1].createdAt) {
@@ -248,14 +244,6 @@ export class DeepseekParser implements ConversationParser {
     }
   }
 
-  /**
-   * Split a node's fragments into at most one user message and one
-   * assistant message. THINK content is prepended to RESPONSE content
-   * (wrapped in a <think> block so the UI can optionally render it).
-   * SEARCH results are formatted as a reference list and appended to
-   * the assistant content. FILE fragments become attachments on the
-   * user message.
-   */
   private extractMessages(
     conversationId: string,
     nodeId: string,
@@ -330,7 +318,7 @@ export class DeepseekParser implements ConversationParser {
     let assistantMsg: ConversationMessage | null = null;
     const assistantParts: string[] = [];
     if (thinkContent.trim()) {
-      assistantParts.push(`<think>\n${thinkContent}\n</think>`);
+      assistantParts.push(`\`\`\`thinking\n${thinkContent}\n\`\`\``);
     }
     if (responseContent.trim()) {
       assistantParts.push(responseContent);
@@ -380,16 +368,6 @@ export class DeepseekParser implements ConversationParser {
   }
 }
 
-/**
- * Split a JSON array string into individual top-level element strings
- * without parsing the whole array. Tracks brace/bracket depth and
- * string boundaries so commas inside the outer brackets mark element
- * boundaries. Yields one substring per element (still valid JSON on
- * its own).
- *
- * The outer `[` and `]` are consumed without yielding; elements are
- * the values at depth 1 (direct children of the top-level array).
- */
 function* splitJsonArrayItems(json: string): Generator<string> {
   let depth = 0;
   let inString = false;

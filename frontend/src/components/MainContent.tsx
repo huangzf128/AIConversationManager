@@ -78,8 +78,11 @@ function MainContent({ conversation, loading, onToggleMessageHidden }: MainConte
   const visibleMessages = useMemo(() => {
     if (!conversation) return [];
     const all = conversation.messages.filter((m) => showHiddenMessages || !m.hidden);
-    const childrenMap = buildChildrenMap(all);
 
+    const hasTreeStructure = all.some((m) => m.parentMessageId != null);
+    if (!hasTreeStructure) return all;
+
+    const childrenMap = buildChildrenMap(all);
     const hasBranches = Array.from(childrenMap.values()).some((s) => s.length > 1);
     if (!hasBranches) return all;
 
@@ -89,6 +92,10 @@ function MainContent({ conversation, loading, onToggleMessageHidden }: MainConte
   const branchInfo = useMemo(() => {
     if (!conversation) return new Map<string | null, { total: number; current: number }>();
     const all = conversation.messages.filter((m) => showHiddenMessages || !m.hidden);
+
+    const hasTreeStructure = all.some((m) => m.parentMessageId != null);
+    if (!hasTreeStructure) return new Map<string | null, { total: number; current: number }>();
+
     const childrenMap = buildChildrenMap(all);
     const info = new Map<string | null, { total: number; current: number }>();
     for (const [parentId, siblings] of childrenMap) {

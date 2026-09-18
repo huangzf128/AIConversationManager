@@ -1,11 +1,11 @@
-// backend/src/conversation/parsers/chatgpt/chatgpt.parser.ts
 import { Injectable } from '@nestjs/common';
-import { ConversationParser } from '../../../common/interfaces/parser.interface.js';
+import { ConversationParser } from '../../common/interfaces/parser.interface.js';
 import {
   Conversation,
   ConversationMessage,
   ConversationAttachment,
-} from '../../../common/interfaces/conversation.interface.js';
+} from '../../common/interfaces/conversation.interface.js';
+import { splitJsonArrayFile } from '../streaming-json-splitter.js';
 
 interface ChatGptAuthor {
   role?: string;
@@ -28,7 +28,6 @@ interface ChatGptAttachment {
 
 interface ChatGptContent {
   content_type?: string;
-  // In real exports, parts is either string[] or (string | object | null)[].
   parts?: (string | ChatGptImageAssetPointer | null)[];
 }
 
@@ -42,9 +41,6 @@ interface ChatGptMessage {
   author?: ChatGptAuthor;
   content?: ChatGptContent | null;
   create_time?: number | null;
-  // A logical assistant reply may be split into multiple consecutive nodes
-  // (e.g. when a tool call happens in between). end_turn === true marks the
-  // last fragment of a reply.
   end_turn?: boolean | null;
   finish_details?: ChatGptFinishDetails | null;
   metadata?: {
@@ -70,7 +66,6 @@ interface ChatGptConversation {
   mapping?: Record<string, ChatGptMappingNode>;
 }
 
-// stop_tokens sentinel values used by ChatGPT exports.
 const STOP_TOKEN_NORMAL_END = 200002;
 const STOP_TOKEN_TOOL_CALL = 200007;
 
@@ -93,7 +88,6 @@ export class ChatgptParser implements ConversationParser {
         const conversation = this.toConversation(raw);
         if (conversation) conversations.push(conversation);
       } catch (err) {
-        // A single malformed conversation must not fail the whole export.
         console.log(
           `ChatgptParser: skipping conversation ${raw?.id ?? '<no-id>'}: ${
             (err as Error).message
@@ -102,6 +96,27 @@ export class ChatgptParser implements ConversationParser {
       }
     }
     return conversations;
+  }
+
+  async *parseReadStream(filePath: string): AsyncGenerator<Conversation> {
+    for await (const itemJson of splitJsonArrayFile(filePath)) {
+      const conversation = this.parseOne(itemJson);
+      if (conversation) yield conversation;
+    }
+  }
+
+  parseOne(itemJson: string): Conversation | null {
+    let raw: ChatGptConversation;
+    try {
+      raw = JSON.parse(itemJson) as ChatGptConversation;
+    } catch {
+      return null;
+    }
+    try {
+      return this.toConversation(raw);
+    } catch {
+      return null;
+    }
   }
 
   private toConversation(raw: ChatGptConversation): Conversation | null {
@@ -113,9 +128,6 @@ export class ChatgptParser implements ConversationParser {
 
     const createdAt =
       this.toIsoString(raw.create_time) ?? messages[0].createdAt;
-    // Use the last message's time as the watermark, matching the Gemini
-    // parser. This keeps incremental import semantics identical across
-    // platforms: messages newer than this get appended on re-import.
     const updatedAt = messages[messages.length - 1].createdAt;
 
     return {
@@ -128,16 +140,6 @@ export class ChatgptParser implements ConversationParser {
     };
   }
 
-  /**
-   * ChatGPT stores messages as a tree (to support edit / regenerate branches).
-   * Walk from current_node back up through `parent` to reconstruct the path
-   * of the currently selected branch.
-   *
-   * A single logical assistant reply may be stored as several consecutive
-   * assistant nodes (e.g. text → tool call → text). We merge those fragments
-   * into one message. The reply ends when `end_turn === true` (or, for older
-   * exports, when finish_details.stop_tokens contains the normal-end sentinel).
-   */
   private walkTree(
     raw: ChatGptConversation,
     conversationId: string,
@@ -148,7 +150,6 @@ export class ChatgptParser implements ConversationParser {
     const path = this.resolvePath(mapping, raw.current_node);
 
     const messages: ConversationMessage[] = [];
-    // Buffer holding the fragments of the current logical assistant reply.
     let assistantBuffer: ConversationMessage | null = null;
 
     const flushAssistant = () => {
@@ -169,7 +170,6 @@ export class ChatgptParser implements ConversationParser {
 
         if (msg) {
           if (assistantBuffer) {
-            // Merge this fragment into the buffered reply.
             const merged = [assistantBuffer.content, msg.content]
               .filter((s) => s && s.trim())
               .join('\n\n');
@@ -180,45 +180,28 @@ export class ChatgptParser implements ConversationParser {
                 ...msg.attachments,
               ];
             }
-            // Re-point the id to the last fragment so the merged message
-            // has a stable identity across re-imports (the last fragment is
-            // the one with end_turn === true).
             assistantBuffer.id = msg.id;
           } else {
             assistantBuffer = msg;
           }
         }
 
-        // Whether or not this fragment produced text, we must inspect
-        // end_turn to know when the logical reply is over.
         if (this.isAssistantReplyEnd(node.message)) {
           flushAssistant();
         }
         continue;
       }
 
-      // Any non-assistant node (user / system) terminates a pending reply.
       flushAssistant();
       const msg = this.toMessage(conversationId, node.message);
       if (msg) messages.push(msg);
     }
 
-    // Trailing assistant reply without an explicit end_turn (malformed data):
-    // still emit it rather than dropping it.
     flushAssistant();
 
     return messages;
   }
 
-  /**
-   * Decide whether the given assistant message is the last fragment of a
-   * logical reply.
-   *
-   * Priority:
-   *   1. `end_turn` field if present (newer exports).
-   *   2. `finish_details.stop_tokens` sentinels (older exports).
-   *   3. Default to true so we don't accidentally swallow subsequent replies.
-   */
   private isAssistantReplyEnd(message: ChatGptMessage): boolean {
     if (message.end_turn != null) {
       return message.end_turn === true;
@@ -229,13 +212,6 @@ export class ChatgptParser implements ConversationParser {
     return true;
   }
 
-  /**
-   * Returns the node-id path from root down to current_node.
-   * 1. If current_node exists and can be traced back to the root via parent,
-   *    use that path (most accurate; preserves the selected branch).
-   * 2. Otherwise walk down from the root following the last child.
-   * 3. Otherwise fall back to sorting all message-bearing nodes by create_time.
-   */
   private resolvePath(
     mapping: Record<string, ChatGptMappingNode>,
     currentNode: string | null | undefined,
@@ -249,13 +225,11 @@ export class ChatgptParser implements ConversationParser {
         path.unshift(nodeId);
         nodeId = mapping[nodeId].parent;
       }
-      // Only accept the path if it actually reaches a real root (parent == null).
       if (path.length > 0 && mapping[path[0]]?.parent == null) {
         return path;
       }
     }
 
-    // Fallback: walk down from the root following the last child.
     const root = this.findRoot(mapping);
     if (root) {
       const path: string[] = [];
@@ -270,7 +244,6 @@ export class ChatgptParser implements ConversationParser {
       if (path.length > 0) return path;
     }
 
-    // Last resort: every message-bearing node, ordered by create_time.
     return Object.values(mapping)
       .filter((n) => n.message && this.toIsoString(n.message.create_time))
       .sort(
@@ -293,9 +266,6 @@ export class ChatgptParser implements ConversationParser {
     conversationId: string,
     message: ChatGptMessage,
   ): ConversationMessage | null {
-    // Messages without an id cannot be matched across re-imports: their id
-    // would have to be synthesized and could drift between imports, which
-    // would break attachment foreign keys. Log and skip them.
     if (!message.id) {
       console.log(
         `ChatgptParser: skipping message without id [conversation: ${conversationId}, role: ${
@@ -311,9 +281,6 @@ export class ChatgptParser implements ConversationParser {
     const { text, attachments } = this.extractContent(message);
     if (!text.trim() && attachments.length === 0) return null;
 
-    // Fall back to epoch 0 so the value is stable across imports; createdAt is
-    // used for display and for the incremental watermark, so it must not
-    // change between runs.
     const time =
       this.toIsoString(message.create_time) ?? new Date(0).toISOString();
 
@@ -333,12 +300,6 @@ export class ChatgptParser implements ConversationParser {
     return null;
   }
 
-  /**
-   * Extract text and attachments from a message's content.
-   * - "text": parts are plain strings.
-   * - "multimodal_text": parts mix strings and image_asset_pointer objects.
-   * - parts may contain null (e.g. thinking entries) and must be filtered.
-   */
   private extractContent(message: ChatGptMessage): {
     text: string;
     attachments: ConversationAttachment[];
@@ -369,16 +330,12 @@ export class ChatgptParser implements ConversationParser {
         part.content_type === 'image_asset_pointer' &&
         part.asset_pointer
       ) {
-        // asset_pointer looks like "sediment://file_abc123" or
-        // "file-service://file_abc123".
         const fileId = part.asset_pointer.replace(
           /^(sediment|file-service):\/\//,
           '',
         );
         const meta = attachmentMeta.get(fileId);
         const displayName = meta?.name ?? fileId;
-        // The actual file inside the zip is named file_xxxxx.dat and lives in
-        // the same folder as conversations-xxx.json.
         const storedName = `${fileId}.dat`;
         attachments.push({ storedName, displayName });
       }

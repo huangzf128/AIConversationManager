@@ -1,17 +1,13 @@
 import { Injectable } from '@nestjs/common';
-import { ConversationParser } from '../../../common/interfaces/parser.interface.js';
+import { ConversationParser } from '../../common/interfaces/parser.interface.js';
 import {
   Conversation,
   ConversationMessage,
-} from '../../../common/interfaces/conversation.interface.js';
+} from '../../common/interfaces/conversation.interface.js';
 
-/**
- * Raw shape of a single conversation inside a Claude "conversations.json"
- * data export (Account settings → Privacy → Export data).
- */
 interface ClaudeChatMessage {
   uuid?: string;
-  sender?: string; // 'human' | 'assistant'
+  sender?: string;
   created_at?: string;
   text?: string;
 }
@@ -45,17 +41,14 @@ export class ClaudeParser implements ConversationParser {
   }
 
   private toConversation(raw: ClaudeConversation): Conversation | null {
-    // Conversations without a uuid cannot be matched across re-imports, so
-    // they are skipped rather than saved with an unstable generated id.
     if (!raw.uuid) return null;
 
-    // Export order is normally chronological already, but sort defensively
-    // so conversations always read oldest-first regardless of export quirks.
     const messages = (raw.chat_messages ?? [])
       .slice()
       .sort(
         (a, b) =>
-          new Date(a.created_at ?? 0).getTime() - new Date(b.created_at ?? 0).getTime(),
+          new Date(a.created_at ?? 0).getTime() -
+          new Date(b.created_at ?? 0).getTime(),
       )
       .map((message) => this.toMessage(raw.uuid!, message))
       .filter((m): m is ConversationMessage => m !== null);
@@ -75,30 +68,32 @@ export class ClaudeParser implements ConversationParser {
     conversationId: string,
     message: ClaudeChatMessage,
   ): ConversationMessage | null {
-    if (message.sender !== 'human' && message.sender !== 'assistant') return null;
+    if (message.sender !== 'human' && message.sender !== 'assistant')
+      return null;
 
     const text = this.stripUnsupportedBlocks(message.text ?? '').trim();
     if (!text) return null;
 
     return {
-      id: message.uuid ?? `${conversationId}-${message.created_at ?? ''}-${message.sender}`,
+      id:
+        message.uuid ??
+        `${conversationId}-${message.created_at ?? ''}-${message.sender}`,
       role: message.sender === 'human' ? 'user' : 'assistant',
       content: text,
       createdAt: message.created_at ?? new Date().toISOString(),
     };
   }
 
-  /**
-   * Claude's export serializes thinking, memory reads, tool use and other
-   * non-text blocks (which often lead an assistant reply) as fenced
-   * placeholder blocks: "This block is not supported on your current
-   * device yet". Those are not part of the visible answer, so drop the
-   * fenced blocks and any bare placeholder lines left in the text.
-   */
   private stripUnsupportedBlocks(text: string): string {
     return text
-      .replace(/```[ \t]*\n?This block is not supported on your current device yet\.[ \t]*\n?```[ \t]*\n?/g, '')
-      .replace(/^This block is not supported on your current device yet\.[ \t]*\n?/gm, '');
+      .replace(
+        /```[ \t]*\n?This block is not supported on your current device yet\.[ \t]*\n?```[ \t]*\n?/g,
+        '',
+      )
+      .replace(
+        /^This block is not supported on your current device yet\.[ \t]*\n?/gm,
+        '',
+      );
   }
 
   private deriveTitle(messages: ConversationMessage[]): string {

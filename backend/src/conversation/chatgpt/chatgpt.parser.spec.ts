@@ -90,7 +90,10 @@ describe('ChatgptParser', () => {
             message: {
               id: 'msg-user',
               author: { role: 'user' },
-              content: { content_type: 'text', parts: ['Explain quantum computing in simple terms'] },
+              content: {
+                content_type: 'text',
+                parts: ['Explain quantum computing in simple terms'],
+              },
               create_time: 1700000050.0,
               metadata: {},
             },
@@ -102,7 +105,10 @@ describe('ChatgptParser', () => {
             message: {
               id: 'msg-assistant',
               author: { role: 'assistant' },
-              content: { content_type: 'text', parts: ['Quantum computing uses qubits...'] },
+              content: {
+                content_type: 'text',
+                parts: ['Quantum computing uses qubits...'],
+              },
               create_time: 1700000100.0,
               metadata: {},
             },
@@ -160,7 +166,10 @@ describe('ChatgptParser', () => {
             message: {
               id: 'msg-assistant-v2',
               author: { role: 'assistant' },
-              content: { content_type: 'text', parts: ['Regenerated response'] },
+              content: {
+                content_type: 'text',
+                parts: ['Regenerated response'],
+              },
               create_time: 1700000200.0,
               metadata: {},
             },
@@ -228,7 +237,10 @@ describe('ChatgptParser', () => {
             message: {
               id: 'msg-assistant',
               author: { role: 'assistant' },
-              content: { content_type: 'text', parts: ['It shows a landscape.'] },
+              content: {
+                content_type: 'text',
+                parts: ['It shows a landscape.'],
+              },
               create_time: 1700000100.0,
               metadata: {},
             },

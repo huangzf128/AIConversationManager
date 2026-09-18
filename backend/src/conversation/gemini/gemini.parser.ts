@@ -1,15 +1,11 @@
 import { Injectable } from '@nestjs/common';
-import { ConversationParser } from '../../../common/interfaces/parser.interface.js';
+import { ConversationParser } from '../../common/interfaces/parser.interface.js';
 import {
   Conversation,
   ConversationMessage,
   ConversationAttachment,
-} from '../../../common/interfaces/conversation.interface.js';
+} from '../../common/interfaces/conversation.interface.js';
 
-/**
- * Raw shape of a single activity record inside a Google Takeout
- * "Gemini Apps" export (the JSON found under MyActivity/Gemini Apps).
- */
 interface TakeoutDetail {
   name?: string;
   url?: string;
@@ -19,11 +15,6 @@ interface TakeoutSafeHtmlItem {
   html?: string;
 }
 
-// Some subtitle entries describe an attachment: { name: '-  original.sql',
-// url: 'original-<hash>.sql' }. `url` here matches an entry in
-// `attachedFiles` and is the filename actually stored in the export;
-// `name` carries the original filename, locale-independent (just a
-// leading bullet character before the name).
 interface TakeoutSubtitle {
   name?: string;
   url?: string;
@@ -40,14 +31,7 @@ interface TakeoutRecord {
   imageFile?: string;
 }
 
-// Matches the chat id in a Gemini share URL, e.g.
-// https://gemini.google.com/app/9d0b8ac907c407f0 -> 9d0b8ac907c407f0
 const CHAT_ID_PATTERN = /\/app\/([0-9a-fA-F]+)/;
-
-// "Message sent" titles are prefixed with a locale-specific label followed
-// by a colon, e.g. "送信したメッセージ: <actual prompt>". We only care about
-// whatever comes after the first colon, so this works across locales
-// without hardcoding the label text itself.
 const SENT_MESSAGE_PATTERN = /^[^:：]+[:：]\s*(.*)$/s;
 
 @Injectable()
@@ -61,12 +45,6 @@ export class GeminiParser implements ConversationParser {
       return [];
     }
 
-    // Group records by chat_id. A single Takeout record can carry
-    // multiple chatIds when Google aggregates near-simultaneous edits
-    // across chats into one activity entry. Each detail[i] pairs with
-    // safeHtmlItem[i], so we track the index alongside the record.
-    // Records with no extractable chat_id are non-conversation noise
-    // (e.g. "previous feedback cleared" entries) and are dropped.
     interface IndexedRecord {
       record: TakeoutRecord;
       detailIndex: number;
@@ -86,8 +64,6 @@ export class GeminiParser implements ConversationParser {
 
     const conversations: Conversation[] = [];
     for (const [chatId, bucket] of grouped) {
-      // Takeout entries come back newest-first; conversations should read
-      // chronologically (oldest message first).
       bucket.sort(
         (a, b) =>
           new Date(a.record.time ?? 0).getTime() -
@@ -123,14 +99,6 @@ export class GeminiParser implements ConversationParser {
     return ids;
   }
 
-  /**
-   * Each Takeout record represents one turn: the user's prompt (encoded
-   * in `title`) and, when present, Gemini's reply (encoded as raw HTML
-   * in `safeHtmlItem`). Split that into up to two ConversationMessage
-   * entries, in user-then-assistant order.
-   * When a record carries multiple chatIds, `detailIndex` selects which
-   * safeHtmlItem corresponds to this particular chat.
-   */
   private toMessages(
     record: TakeoutRecord,
     chatId: string,
@@ -164,9 +132,6 @@ export class GeminiParser implements ConversationParser {
     return messages;
   }
 
-  // `attachedFiles` gives the filenames actually stored in the export
-  // (relative to the same folder as the JSON file). `subtitles` maps
-  // each of those back to the original filename the user uploaded.
   private extractAttachments(
     record: TakeoutRecord,
   ): ConversationAttachment[] | undefined {
