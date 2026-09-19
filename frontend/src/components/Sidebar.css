@@ -331,3 +331,10 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+.loading-more {
+  padding: 12px 20px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
+}

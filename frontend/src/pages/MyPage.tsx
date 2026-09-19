@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Sidebar from '../components/Sidebar';
 import MainContent from '../components/MainContent';
 import './MyPage.css';
@@ -38,9 +38,12 @@ export interface ConversationDetail {
 }
 
 const API_BASE = 'http://localhost:3000';
+const PAGE_SIZE = 20;
 
 function MyPage() {
   const [conversations, setConversations] = useState<ConversationListItem[]>([]);
+  const [hasMore, setHasMore] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Fetched conversation details, keyed by id, so re-selecting a
   // previously-opened conversation doesn't need to hit the network again.
@@ -54,11 +57,31 @@ function MyPage() {
   const [showHidden, setShowHidden] = useState(false);
 
   useEffect(() => {
-    fetch(`${API_BASE}/conversations`)
+    fetch(`${API_BASE}/conversations?take=${PAGE_SIZE}&skip=0`)
       .then((res) => res.json())
-      .then(setConversations)
-      .catch(() => setConversations([]));
+      .then((result: { data: ConversationListItem[]; hasMore: boolean }) => {
+        setConversations(result.data);
+        setHasMore(result.hasMore);
+      })
+      .catch(() => {
+        setConversations([]);
+        setHasMore(false);
+      });
   }, []);
+
+  const loadMore = useCallback(() => {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    const skip = conversations.length;
+    fetch(`${API_BASE}/conversations?take=${PAGE_SIZE}&skip=${skip}`)
+      .then((res) => res.json())
+      .then((result: { data: ConversationListItem[]; hasMore: boolean }) => {
+        setConversations((prev) => [...prev, ...result.data]);
+        setHasMore(result.hasMore);
+      })
+      .catch(() => {})
+      .finally(() => setLoadingMore(false));
+  }, [loadingMore, hasMore, conversations.length]);
 
   // Only fetches when the selected conversation isn't already cached; never
   // needs to synchronously clear state for the "nothing selected" case,
@@ -187,6 +210,9 @@ function MyPage() {
         onSelect={setSelectedId}
         onToggleHidden={handleToggleHidden}
         onToggleStarred={handleToggleStarred}
+        hasMore={hasMore}
+        loadingMore={loadingMore}
+        onLoadMore={loadMore}
       />
       <MainContent
         key={selectedId}

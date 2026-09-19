@@ -56,11 +56,39 @@ export class ConversationService {
     };
   }
 
-  findAll() {
-    return this.prisma.conversation.findMany({
-      orderBy: { updatedAt: 'desc' },
-      include: { _count: { select: { messages: true } } },
+  async findAll(take = 20, skip = 0) {
+    const [conversations, total] = await Promise.all([
+      this.prisma.conversation.findMany({
+        orderBy: { updatedAt: 'desc' },
+        take,
+        skip,
+      }),
+      this.prisma.conversation.count(),
+    ]);
+
+    if (conversations.length === 0) {
+      return { data: [], total, hasMore: false };
+    }
+
+    const conversationIds = conversations.map((c) => c.id);
+    const messageCounts = await this.prisma.message.groupBy({
+      by: ['conversationId'],
+      where: { conversationId: { in: conversationIds } },
+      _count: { id: true },
     });
+
+    const countMap = new Map(
+      messageCounts.map((c) => [c.conversationId, c._count.id]),
+    );
+
+    return {
+      data: conversations.map((c) => ({
+        ...c,
+        _count: { messages: countMap.get(c.id) ?? 0 },
+      })),
+      total,
+      hasMore: skip + conversations.length < total,
+    };
   }
 
   setHidden(id: string, hidden: boolean) {
@@ -84,25 +112,70 @@ export class ConversationService {
     });
   }
 
-  findOne(id: string) {
-    return this.prisma.conversation.findUnique({
+  async findOne(id: string) {
+    const conversation = await this.prisma.conversation.findUnique({
       where: { id },
-      include: {
-        messages: {
-          orderBy: { createdAt: 'asc' },
-          include: { attachments: true },
-        },
-      },
     });
+
+    if (!conversation) return null;
+
+    const messages = await this.prisma.message.findMany({
+      where: { conversationId: id },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    if (messages.length === 0) {
+      return { ...conversation, messages: [] };
+    }
+
+    const messageIds = messages.map((m) => m.id);
+    const attachments = await this.prisma.attachment.findMany({
+      where: { messageId: { in: messageIds } },
+    });
+
+    const attachmentMap = new Map<string, typeof attachments>();
+    for (const att of attachments) {
+      const list = attachmentMap.get(att.messageId) ?? [];
+      list.push(att);
+      attachmentMap.set(att.messageId, list);
+    }
+
+    return {
+      ...conversation,
+      messages: messages.map((m) => ({
+        ...m,
+        attachments: attachmentMap.get(m.id) ?? [],
+      })),
+    };
   }
 
   async findAttachment(id: string) {
-    return this.prisma.attachment.findUnique({
+    const attachment = await this.prisma.attachment.findUnique({
       where: { id },
-      include: {
-        message: { include: { conversation: { select: { platform: true } } } },
-      },
     });
+
+    if (!attachment) return null;
+
+    const message = await this.prisma.message.findUnique({
+      where: { id: attachment.messageId },
+    });
+
+    if (!message) {
+      return { ...attachment, message: null };
+    }
+
+    const conversation = await this.prisma.conversation.findUnique({
+      where: { id: message.conversationId },
+      select: { platform: true },
+    });
+
+    return {
+      ...attachment,
+      message: {
+        ...message,
+        conversation: conversation ?? null,
+      },
+    };
   }
 
   resolveAttachmentPath(storagePath: string, platform: string): string {
@@ -296,27 +369,39 @@ export class ConversationService {
 
       const conversations = await this.prisma.conversation.findMany({
         where: { id: { in: batch } },
-        select: {
-          id: true,
-          messages: {
-            select: {
-              attachments: {
-                select: { storagePath: true },
-              },
-            },
-          },
-        },
+        select: { id: true },
       });
 
       for (const conversation of conversations) {
-        for (const message of conversation.messages) {
-          for (const attachment of message.attachments) {
+        const messages = await this.prisma.message.findMany({
+          where: { conversationId: conversation.id },
+          select: { id: true },
+        });
+
+        const messageIds = messages.map((m) => m.id);
+
+        if (messageIds.length > 0) {
+          const attachments = await this.prisma.attachment.findMany({
+            where: { messageId: { in: messageIds } },
+            select: { storagePath: true },
+          });
+
+          for (const attachment of attachments) {
             await this.attachmentStorage.delete(
               attachment.storagePath,
               platform,
             );
           }
+
+          await this.prisma.attachment.deleteMany({
+            where: { messageId: { in: messageIds } },
+          });
         }
+
+        await this.prisma.message.deleteMany({
+          where: { conversationId: conversation.id },
+        });
+
         await this.prisma.conversation.delete({
           where: { id: conversation.id },
         });
@@ -359,18 +444,23 @@ export class ConversationService {
           title: conversation.title,
           createdAt: new Date(conversation.createdAt),
           updatedAt: new Date(conversation.updatedAt),
-          messages: {
-            create: uniqueMessages.map((message) => ({
-              id: message.id,
-              role: message.role,
-              content: message.content,
-              createdAt: new Date(message.createdAt),
-              hidden: false,
-              parentMessageId: message.parentMessageId ?? null,
-            })),
-          },
         },
       });
+
+      if (uniqueMessages.length > 0) {
+        await this.prisma.message.createMany({
+          data: uniqueMessages.map((message) => ({
+            id: message.id,
+            role: message.role,
+            content: message.content,
+            conversationId: conversation.id,
+            createdAt: new Date(message.createdAt),
+            hidden: false,
+            parentMessageId: message.parentMessageId ?? null,
+          })),
+        });
+      }
+
       return uniqueMessages.map((m) => m.id);
     }
 
@@ -388,18 +478,23 @@ export class ConversationService {
       data: {
         title: conversation.title,
         updatedAt: new Date(conversation.updatedAt),
-        messages: {
-          create: newMessages.map((message) => ({
-            id: message.id,
-            role: message.role,
-            content: message.content,
-            createdAt: new Date(message.createdAt),
-            hidden: false,
-            parentMessageId: message.parentMessageId ?? null,
-          })),
-        },
       },
     });
+
+    if (newMessages.length > 0) {
+      await this.prisma.message.createMany({
+        data: newMessages.map((message) => ({
+          id: message.id,
+          role: message.role,
+          content: message.content,
+          conversationId: conversation.id,
+          createdAt: new Date(message.createdAt),
+          hidden: false,
+          parentMessageId: message.parentMessageId ?? null,
+        })),
+      });
+    }
+
     return newMessages.map((m) => m.id);
   }
 }

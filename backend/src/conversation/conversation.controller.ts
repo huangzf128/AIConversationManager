@@ -7,6 +7,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Res,
   UploadedFile,
   UseInterceptors,
@@ -28,8 +29,11 @@ export class ConversationController {
   constructor(private readonly conversationService: ConversationService) {}
 
   @Get()
-  findAll() {
-    return this.conversationService.findAll();
+  findAll(@Query('take') take?: string, @Query('skip') skip?: string) {
+    return this.conversationService.findAll(
+      take ? parseInt(take, 10) : undefined,
+      skip ? parseInt(skip, 10) : undefined,
+    );
   }
 
   @Get('attachments/:id/download')
