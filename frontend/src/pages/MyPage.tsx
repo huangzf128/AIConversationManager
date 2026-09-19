@@ -57,7 +57,9 @@ function MyPage() {
   const [showHidden, setShowHidden] = useState(false);
 
   useEffect(() => {
-    fetch(`${API_BASE}/conversations?take=${PAGE_SIZE}&skip=0`)
+    const params = new URLSearchParams({ take: String(PAGE_SIZE), skip: '0' });
+    if (chatIdSearch) params.set('searchId', chatIdSearch);
+    fetch(`${API_BASE}/conversations?${params}`)
       .then((res) => res.json())
       .then((result: { data: ConversationListItem[]; hasMore: boolean }) => {
         setConversations(result.data);
@@ -67,13 +69,15 @@ function MyPage() {
         setConversations([]);
         setHasMore(false);
       });
-  }, []);
+  }, [chatIdSearch]);
 
   const loadMore = useCallback(() => {
     if (loadingMore || !hasMore) return;
     setLoadingMore(true);
     const skip = conversations.length;
-    fetch(`${API_BASE}/conversations?take=${PAGE_SIZE}&skip=${skip}`)
+    const params = new URLSearchParams({ take: String(PAGE_SIZE), skip: String(skip) });
+    if (chatIdSearch) params.set('searchId', chatIdSearch);
+    fetch(`${API_BASE}/conversations?${params}`)
       .then((res) => res.json())
       .then((result: { data: ConversationListItem[]; hasMore: boolean }) => {
         setConversations((prev) => [...prev, ...result.data]);
@@ -81,7 +85,7 @@ function MyPage() {
       })
       .catch(() => {})
       .finally(() => setLoadingMore(false));
-  }, [loadingMore, hasMore, conversations.length]);
+  }, [loadingMore, hasMore, conversations.length, chatIdSearch]);
 
   // Only fetches when the selected conversation isn't already cached; never
   // needs to synchronously clear state for the "nothing selected" case,
@@ -109,10 +113,9 @@ function MyPage() {
       if (platformFilter.size > 0 && !platformFilter.has(c.platform)) return false;
       if (dateFrom && c.updatedAt < dateFrom) return false;
       if (dateTo && c.updatedAt > `${dateTo}T23:59:59.999Z`) return false;
-      if (chatIdSearch && !c.id.toLowerCase().includes(chatIdSearch.toLowerCase())) return false;
       return true;
     });
-  }, [conversations, platformFilter, dateFrom, dateTo, chatIdSearch, showHidden]);
+  }, [conversations, platformFilter, dateFrom, dateTo, showHidden]);
 
   const togglePlatform = (platform: string) => {
     setPlatformFilter((prev) => {

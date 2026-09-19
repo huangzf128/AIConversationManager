@@ -1,8 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import './MainContent.css';
-import { ChevronIcon, EyeIcon, PaperclipIcon } from './Icons';
+import { ArrowUpIcon, ChevronIcon, EyeIcon, PaperclipIcon } from './Icons';
 import ToggleSwitch from './ToggleSwitch.js';
 import type { ConversationDetail, MessageItem } from '../pages/MyPage';
 import { attachmentDownloadUrl } from '../common/api.js';
@@ -69,6 +69,16 @@ function MainContent({ conversation, loading, onToggleMessageHidden }: MainConte
   const [showHiddenMessages, setShowHiddenMessages] = useState(false);
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
   const [activeBranch, setActiveBranch] = useState<Map<string | null, number>>(new Map());
+  const [showBackToTop, setShowBackToTop] = useState(false);
+  const mainRef = useRef<HTMLElement>(null);
+
+  const handleScroll = useCallback(() => {
+    setShowBackToTop((mainRef.current?.scrollTop ?? 0) > 300);
+  }, []);
+
+  const scrollToTop = useCallback(() => {
+    mainRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+  }, []);
 
   const isImageAttachment = (displayName: string): boolean => {
     const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg'];
@@ -157,7 +167,7 @@ function MainContent({ conversation, loading, onToggleMessageHidden }: MainConte
   };
 
   return (
-    <main className="main-content" key={conversation.id}>
+    <main className="main-content" key={conversation.id} ref={mainRef} onScroll={handleScroll}>
       <header className="thread-header">
         <div className="thread-header-top">
           <a
@@ -303,6 +313,11 @@ function MainContent({ conversation, loading, onToggleMessageHidden }: MainConte
           </button>
           <img src={previewImageUrl} alt="Full size preview" className="modal-image" />
         </div>
+      )}
+      {showBackToTop && (
+        <button className="back-to-top" onClick={scrollToTop} type="button">
+          <ArrowUpIcon />
+        </button>
       )}
     </main>
   );

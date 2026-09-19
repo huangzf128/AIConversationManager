@@ -103,6 +103,20 @@ export function StarIcon({ starred }: StarIconProps) {
   );
 }
 
+export function ArrowUpIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+      <path
+        d="M8 13V3M8 3L4 7M8 3l4 4"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 export function PaperclipIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none">

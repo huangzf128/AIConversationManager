@@ -29,10 +29,15 @@ export class ConversationController {
   constructor(private readonly conversationService: ConversationService) {}
 
   @Get()
-  findAll(@Query('take') take?: string, @Query('skip') skip?: string) {
+  findAll(
+    @Query('take') take?: string,
+    @Query('skip') skip?: string,
+    @Query('searchId') searchId?: string,
+  ) {
     return this.conversationService.findAll(
       take ? parseInt(take, 10) : undefined,
       skip ? parseInt(skip, 10) : undefined,
+      searchId || undefined,
     );
   }
 

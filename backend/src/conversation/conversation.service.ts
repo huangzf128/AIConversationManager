@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { PrismaService } from '../prisma/prisma.service.js';
 import {
@@ -46,14 +47,17 @@ export class ConversationService {
     };
   }
 
-  async findAll(take = 20, skip = 0) {
+  async findAll(take = 20, skip = 0, searchId?: string) {
+    const where = searchId ? { id: { contains: searchId } } : {};
+
     const [conversations, total] = await Promise.all([
       this.prisma.conversation.findMany({
+        where,
         orderBy: { updatedAt: 'desc' },
         take,
         skip,
       }),
-      this.prisma.conversation.count(),
+      this.prisma.conversation.count({ where }),
     ]);
 
     if (conversations.length === 0) {
@@ -177,7 +181,7 @@ export class ConversationService {
     rawFileContent: string,
     syncDelete = false,
   ) {
-    const tmpDir = fs.mkdtempSync('ai-import-');
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-import-'));
     const tmpFile = path.join(tmpDir, 'conversations.json');
     try {
       fs.writeFileSync(tmpFile, rawFileContent, 'utf-8');
@@ -187,10 +191,19 @@ export class ConversationService {
       ];
 
       if (platform === 'gemini') {
-        return this.importGeminiStreamed(jsonFiles, undefined, syncDelete);
+        return await this.importGeminiStreamed(
+          jsonFiles,
+          undefined,
+          syncDelete,
+        );
       }
 
-      return this.importStreamed(platform, jsonFiles, undefined, syncDelete);
+      return await this.importStreamed(
+        platform,
+        jsonFiles,
+        undefined,
+        syncDelete,
+      );
     } finally {
       try {
         fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -220,65 +233,91 @@ export class ConversationService {
       imported++;
       importedIds.add(conversation.id);
 
-      if (insertedIds.size === 0 || skipAttachmentFiles || !attachmentLookup)
-        continue;
+      if (insertedIds.size === 0) continue;
 
-      const { fuzzyEntryMap, consumed } = attachmentLookup;
       for (const message of conversation.messages) {
         if (!insertedIds.has(message.id)) continue;
         if (!message.attachments?.length) continue;
 
         for (const attachment of message.attachments) {
-          const primaryPath =
-            zipDir === '.' || zipDir === ''
-              ? attachment.storedName
-              : `${zipDir}/${attachment.storedName}`;
-          let match = findFile(fuzzyEntryMap, consumed, primaryPath);
+          if (attachmentLookup && !skipAttachmentFiles) {
+            const { fuzzyEntryMap, consumed } = attachmentLookup;
+            const primaryPath =
+              zipDir === '.' || zipDir === ''
+                ? attachment.storedName
+                : `${zipDir}/${attachment.storedName}`;
+            let match = findFile(fuzzyEntryMap, consumed, primaryPath);
 
-          if (!match) {
-            match = findFileByBasename(
-              fuzzyEntryMap,
-              consumed,
-              attachment.storedName,
-            );
-          }
-          if (!match) {
-            this.logger.warn(
-              `Attachment not found in zip [Chat ID: ${conversation.id}]: ${primaryPath}`,
-            );
-            continue;
-          }
-
-          try {
-            const attachmentData = fs.readFileSync(match.absolutePath);
-            const { storagePath, contentHash } =
-              await this.attachmentStorage.save(
-                attachmentData,
-                attachment.displayName,
-                conversation.platform,
+            if (!match) {
+              match = findFileByBasename(
+                fuzzyEntryMap,
+                consumed,
+                attachment.storedName,
               );
+            }
+            if (!match) {
+              this.logger.warn(
+                `Attachment not found in zip [Chat ID: ${conversation.id}]: ${primaryPath}`,
+              );
+              continue;
+            }
 
-            await this.prisma.attachment.upsert({
-              where: {
-                messageId_contentHash: {
-                  messageId: message.id,
-                  contentHash,
+            try {
+              const attachmentData = fs.readFileSync(match.absolutePath);
+              const { storagePath, contentHash } =
+                await this.attachmentStorage.save(
+                  attachmentData,
+                  attachment.displayName,
+                  conversation.platform,
+                );
+
+              await this.prisma.attachment.upsert({
+                where: {
+                  messageId_contentHash: {
+                    messageId: message.id,
+                    contentHash,
+                  },
                 },
-              },
-              create: {
-                messageId: message.id,
-                displayName: attachment.displayName,
-                storagePath,
-                contentHash,
-                size: attachmentData.length,
-              },
-              update: {},
-            });
-          } catch (err) {
-            this.logger.error(
-              `Failed to save attachment [${attachment.displayName}] for message ${message.id} in conversation ${conversation.id}`,
-              err,
-            );
+                create: {
+                  messageId: message.id,
+                  displayName: attachment.displayName,
+                  storagePath,
+                  contentHash,
+                  size: attachmentData.length,
+                },
+                update: {},
+              });
+            } catch (err) {
+              this.logger.error(
+                `Failed to save attachment [${attachment.displayName}] for message ${message.id} in conversation ${conversation.id}`,
+                err,
+              );
+            }
+          } else {
+            const placeholderHash = `${message.id}:${attachment.storedName}`;
+            try {
+              await this.prisma.attachment.upsert({
+                where: {
+                  messageId_contentHash: {
+                    messageId: message.id,
+                    contentHash: placeholderHash,
+                  },
+                },
+                create: {
+                  messageId: message.id,
+                  displayName: attachment.displayName,
+                  storagePath: attachment.storedName,
+                  contentHash: placeholderHash,
+                  size: 0,
+                },
+                update: {},
+              });
+            } catch (err) {
+              this.logger.error(
+                `Failed to save attachment metadata [${attachment.displayName}] for message ${message.id} in conversation ${conversation.id}`,
+                err,
+              );
+            }
           }
         }
       }
