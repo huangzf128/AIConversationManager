@@ -411,15 +411,17 @@ export class ConversationService {
       messageId: string;
       chatId: string;
       attachment: ConversationAttachment;
+      zipDir: string;
     }[] = [];
     let imported = 0;
     const importedIds = new Set<string>();
 
     await this.prisma.$transaction(
       async (tx) => {
-        for await (const { result } of geminiImporter.parseZipEntriesStreamed(
-          jsonFiles,
-        )) {
+        for await (const {
+          result,
+          zipDir,
+        } of geminiImporter.parseZipEntriesStreamed(jsonFiles)) {
           const { chatId, messages, recordTime, title } = result;
           const recordTimeMs = new Date(recordTime).getTime();
 
@@ -480,6 +482,7 @@ export class ConversationService {
                   messageId: message.id,
                   chatId,
                   attachment,
+                  zipDir,
                 });
               }
             }
@@ -509,8 +512,16 @@ export class ConversationService {
 
     if (attachmentLookup) {
       const { fuzzyEntryMap, consumed } = attachmentLookup;
-      for (const { messageId, chatId, attachment } of pendingAttachments) {
-        const primaryPath = attachment.storedName;
+      for (const {
+        messageId,
+        chatId,
+        attachment,
+        zipDir,
+      } of pendingAttachments) {
+        const primaryPath =
+          zipDir === '.' || zipDir === ''
+            ? attachment.storedName
+            : `${zipDir}/${attachment.storedName}`;
         let match = findFile(fuzzyEntryMap, consumed, primaryPath);
 
         if (!match) {

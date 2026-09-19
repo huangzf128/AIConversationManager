@@ -219,7 +219,8 @@ export function findFileByBasename(
     for (const entry of list) {
       if (consumed.has(entry)) continue;
       const base = path.basename(entry.entryPath).toLowerCase();
-      if (base === targetBase || base.replace(/\.[^.]+$/, '') === targetNoExt) {
+      const baseNoExt = base.replace(/\.[^.]+$/, '').replace(DUP_SUFFIX, '');
+      if (base === targetBase || baseNoExt === targetNoExt) {
         consumed.add(entry);
         return entry;
       }
