@@ -5,6 +5,7 @@ import {
   AiPlatform,
   Conversation,
   ConversationMessage,
+  ConversationAttachment,
 } from '../common/interfaces/conversation.interface.js';
 import { ConversationParser } from '../common/interfaces/parser.interface.js';
 import { PlatformImporter } from '../common/interfaces/importer.interface.js';
@@ -342,6 +343,196 @@ export class ConversationService {
     let deleted = 0;
     if (syncDelete) {
       deleted = await this.syncDeleteMissing(platform, importedIds);
+    }
+
+    return { imported, deleted };
+  }
+
+  async importFromZipGemini(zipBuffer: Buffer, syncDelete = false) {
+    const geminiImporter = this.importers['gemini'] as GeminiImporter;
+    const { tempDir, allFiles, jsonFiles } = extractZipToTempDir(zipBuffer, {
+      shouldExpandZip: geminiImporter.shouldExpandZip?.bind(geminiImporter),
+      shouldParseJson: geminiImporter.shouldParseJson?.bind(geminiImporter),
+    });
+    const { fuzzyEntryMap, consumed } = buildFuzzyFileMap(allFiles);
+
+    interface ConversationMeta {
+      title: string;
+      titleTime: number;
+      updatedAt: number;
+      createdAt: string;
+      dbExists: boolean;
+      dbUpdatedAt: number;
+      insertedMessageIds: Set<string>;
+    }
+
+    const conversationMap = new Map<string, ConversationMeta>();
+    const pendingAttachments: {
+      messageId: string;
+      chatId: string;
+      attachment: ConversationAttachment;
+    }[] = [];
+    let imported = 0;
+    const importedIds = new Set<string>();
+
+    try {
+      await this.prisma.$transaction(
+        async (tx) => {
+          for await (const { result } of geminiImporter.parseZipEntriesStreamed(
+            jsonFiles,
+          )) {
+            const { chatId, messages, recordTime, title } = result;
+            const recordTimeMs = new Date(recordTime).getTime();
+
+            let meta = conversationMap.get(chatId);
+            if (!meta) {
+              const existing = await tx.conversation.findUnique({
+                where: { id: chatId },
+                select: { updatedAt: true, createdAt: true },
+              });
+
+              if (existing) {
+                meta = {
+                  title: '',
+                  titleTime: 0,
+                  updatedAt: existing.updatedAt.getTime(),
+                  createdAt: existing.createdAt.toISOString(),
+                  dbExists: true,
+                  dbUpdatedAt: existing.updatedAt.getTime(),
+                  insertedMessageIds: new Set(),
+                };
+              } else {
+                meta = {
+                  title,
+                  titleTime: recordTimeMs,
+                  updatedAt: recordTimeMs,
+                  createdAt: recordTime,
+                  dbExists: false,
+                  dbUpdatedAt: 0,
+                  insertedMessageIds: new Set(),
+                };
+              }
+              conversationMap.set(chatId, meta);
+            }
+
+            if (meta.dbExists && recordTimeMs <= meta.dbUpdatedAt) continue;
+
+            if (!meta.dbExists && recordTimeMs < meta.titleTime) {
+              meta.title = title;
+              meta.titleTime = recordTimeMs;
+            }
+
+            meta.updatedAt = Math.max(meta.updatedAt, recordTimeMs);
+            for (const message of messages) {
+              await tx.message.upsert({
+                where: { id: message.id },
+                create: {
+                  id: message.id,
+                  role: message.role,
+                  content: message.content,
+                  conversationId: chatId,
+                  createdAt: new Date(message.createdAt),
+                  hidden: false,
+                  parentMessageId: message.parentMessageId ?? null,
+                },
+                update: {},
+              });
+              meta.insertedMessageIds.add(message.id);
+
+              if (message.attachments?.length) {
+                for (const attachment of message.attachments) {
+                  pendingAttachments.push({
+                    messageId: message.id,
+                    chatId,
+                    attachment,
+                  });
+                }
+              }
+            }
+          }
+
+          for (const [chatId, meta] of conversationMap) {
+            await tx.conversation.upsert({
+              where: { id: chatId },
+              create: {
+                id: chatId,
+                platform: 'gemini',
+                title: meta.title,
+                createdAt: new Date(meta.createdAt),
+                updatedAt: new Date(meta.updatedAt),
+              },
+              update: {
+                updatedAt: new Date(meta.updatedAt),
+              },
+            });
+            imported++;
+            importedIds.add(chatId);
+          }
+        },
+        { timeout: 300_000 },
+      );
+
+      for (const { messageId, chatId, attachment } of pendingAttachments) {
+        const primaryPath = attachment.storedName;
+        let match = findFile(fuzzyEntryMap, consumed, primaryPath);
+
+        if (!match) {
+          match = findFileByBasename(
+            fuzzyEntryMap,
+            consumed,
+            attachment.storedName,
+          );
+        }
+        if (!match) {
+          this.logger.warn(
+            `Attachment not found in zip [Chat ID: ${chatId}]: ${primaryPath}`,
+          );
+          continue;
+        }
+
+        try {
+          const attachmentData = fs.readFileSync(match.absolutePath);
+          const { storagePath, contentHash } =
+            await this.attachmentStorage.save(
+              attachmentData,
+              attachment.displayName,
+              'gemini',
+            );
+
+          await this.prisma.attachment.upsert({
+            where: {
+              messageId_contentHash: {
+                messageId,
+                contentHash,
+              },
+            },
+            create: {
+              messageId,
+              displayName: attachment.displayName,
+              storagePath,
+              contentHash,
+              size: attachmentData.length,
+            },
+            update: {},
+          });
+        } catch (err) {
+          this.logger.error(
+            `Failed to save attachment [${attachment.displayName}] for message ${messageId} in conversation ${chatId}`,
+            err,
+          );
+        }
+      }
+    } finally {
+      try {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      } catch {
+        // ignore cleanup errors
+      }
+    }
+
+    let deleted = 0;
+    if (syncDelete) {
+      deleted = await this.syncDeleteMissing('gemini', importedIds);
     }
 
     return { imported, deleted };

@@ -115,3 +115,49 @@ The parser handles this by creating a user message even when `title`
 contains no text, as long as the record has attachments. The message
 content is set to `[画像]` as a placeholder, and the attachments are
 preserved normally.
+
+## Streaming Import
+
+When importing a Gemini zip, the backend uses `importFromZipGemini` instead
+of the generic `importFromZip`. This avoids `JSON.parse` on the entire
+Takeout file and instead processes records one by one:
+
+### Flow
+
+1. `GeminiParser.parseRecordStream(filePath)` uses `splitJsonArrayFile`
+   to stream the JSON array, yielding one `TakeoutRecord` at a time
+2. Each record is parsed, `chatId` extracted, and messages converted
+3. `GeminiImporter.parseZipEntriesStreamed` iterates all JSON files in
+   the zip, yielding `{ result: StreamedRecordResult, zipDir }` per record
+4. `importFromZipGemini` processes each record within a `$transaction`:
+
+   - **First encounter of chatId**: query DB for existing conversation
+     - Exists → set `dbExists: true`, `dbUpdatedAt` = DB value
+     - Not exists → set `dbExists: false`, `title` from this record
+   - **Watermark skip**: if `dbExists && recordTime <= dbUpdatedAt`, skip
+   - **Title tracking** (new conversations only): if a later record has
+     an earlier `time`, its title replaces the current one (title should
+     come from the first user message)
+   - **Message upsert**: `tx.message.upsert` per message
+   - **Attachment collection**: messages with attachments are added to
+     `pendingAttachments` for post-transaction processing
+5. After all records: batch `tx.conversation.upsert` for each chatId
+6. After transaction commits: process `pendingAttachments` (file I/O
+   outside the transaction)
+
+### Watermark Logic
+
+| Condition | Action |
+|-----------|--------|
+| `!dbExists` | Insert all messages; `updatedAt = max(recordTime)` |
+| `dbExists && recordTime > dbUpdatedAt` | Insert message; update `updatedAt` |
+| `dbExists && recordTime <= dbUpdatedAt` | Skip (already in DB) |
+
+### Title Selection
+
+For new conversations, the title is derived from the record with the
+**earliest** `time` (the first user message). As records arrive in
+Takeout order (newest-first), the title is updated whenever a record
+with an earlier timestamp is encountered.
+
+For existing conversations, the DB title is preserved (not overwritten).

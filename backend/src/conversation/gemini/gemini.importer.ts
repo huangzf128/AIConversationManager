@@ -6,7 +6,7 @@ import {
   ParsedConversation,
   JsonFileEntry,
 } from '../../common/interfaces/importer.interface.js';
-import { GeminiParser } from './gemini.parser.js';
+import { GeminiParser, StreamedRecordResult } from './gemini.parser.js';
 
 @Injectable()
 export class GeminiImporter implements PlatformImporter {
@@ -43,6 +43,19 @@ export class GeminiImporter implements PlatformImporter {
       const dir = path.dirname(entryPath);
       for (const conversation of parsed) {
         yield { conversation, zipDir: dir };
+      }
+    }
+  }
+
+  async *parseZipEntriesStreamed(
+    jsonFiles: JsonFileEntry[],
+  ): AsyncGenerator<{ result: StreamedRecordResult; zipDir: string }> {
+    for (const { entryPath, absolutePath } of jsonFiles) {
+      if (!fs.existsSync(absolutePath)) continue;
+
+      const dir = path.dirname(entryPath);
+      for await (const result of this.parser.parseRecordStream(absolutePath)) {
+        yield { result, zipDir: dir };
       }
     }
   }

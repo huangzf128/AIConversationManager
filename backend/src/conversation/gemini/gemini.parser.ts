@@ -5,6 +5,14 @@ import {
   ConversationMessage,
   ConversationAttachment,
 } from '../../common/interfaces/conversation.interface.js';
+import { splitJsonArrayFile } from '../utils/streaming-json-splitter.js';
+
+export interface StreamedRecordResult {
+  chatId: string;
+  messages: ConversationMessage[];
+  recordTime: string;
+  title: string;
+}
 
 interface TakeoutDetail {
   name?: string;
@@ -88,6 +96,33 @@ export class GeminiParser implements ConversationParser {
     }
 
     return conversations;
+  }
+
+  async *parseRecordStream(
+    filePath: string,
+  ): AsyncGenerator<StreamedRecordResult> {
+    for await (const itemJson of splitJsonArrayFile(filePath)) {
+      let record: TakeoutRecord;
+      try {
+        record = JSON.parse(itemJson) as TakeoutRecord;
+      } catch {
+        continue;
+      }
+
+      const chatIds = this.extractChatIds(record);
+      if (chatIds.length === 0) continue;
+
+      const recordTime = record.time ?? new Date().toISOString();
+      const title = this.deriveTitle(record);
+
+      for (let i = 0; i < chatIds.length; i++) {
+        const chatId = chatIds[i];
+        const messages = this.toMessages(record, chatId, i);
+        if (messages.length === 0) continue;
+
+        yield { chatId, messages, recordTime, title };
+      }
+    }
   }
 
   private extractChatIds(record: TakeoutRecord): string[] {

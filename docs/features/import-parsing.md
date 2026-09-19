@@ -16,7 +16,12 @@ The backend dispatches to either `importFromFile` (`.json`) or
 `importFromZip` (`.zip`), then runs the platform-specific parser and
 persists the results.
 
-For DeepSeek, both paths use **stream parsing** — the parser yields one
+For **Gemini zip uploads**, the backend uses `importFromZipGemini` which
+streams the Takeout JSON records one by one, upserts messages individually,
+and batch-upserts conversations at the end — all within a transaction.
+See [parser-gemini.md](parser-gemini.md#streaming-import) for details.
+
+For **DeepSeek**, both paths use **stream parsing** — the parser yields one
 conversation at a time and each is persisted immediately, so only one
 chat object lives in memory at any point. See
 [parser-deepseek.md](parser-deepseek.md#stream-parsing) for details.

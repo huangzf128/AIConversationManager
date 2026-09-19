@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+* Gemini zip import now uses streaming: Takeout JSON records are parsed
+  one by one via `splitJsonArrayFile`, messages are upserted individually,
+  and conversations are batch-upserted at the end — all within a
+  `$transaction`. This avoids `JSON.parse` on the entire file and
+  significantly reduces peak heap usage for large Takeout exports.
+* Gemini streaming import uses watermark-based skip: for existing
+  conversations, only records with `time > dbUpdatedAt` are processed.
+* Gemini streaming import selects conversation title from the record with
+  the earliest timestamp (first user message), not the last.
 * DeepSeek import now uses stream parsing: the JSON array is scanned for
   element boundaries and each conversation is parsed and persisted
   individually, keeping only one chat object in memory at a time. This
