@@ -98,12 +98,6 @@ export class ConversationController {
       file.mimetype === 'application/zip';
 
     if (isZip) {
-      if (resolvedPlatform === 'gemini') {
-        return this.conversationService.importFromZipGemini(
-          file.buffer,
-          shouldSyncDelete,
-        );
-      }
       return this.conversationService.importFromZip(
         resolvedPlatform,
         file.buffer,

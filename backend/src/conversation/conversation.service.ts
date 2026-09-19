@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { PrismaService } from '../prisma/prisma.service.js';
 import {
   AiPlatform,
@@ -7,12 +8,10 @@ import {
   ConversationMessage,
   ConversationAttachment,
 } from '../common/interfaces/conversation.interface.js';
-import { ConversationParser } from '../common/interfaces/parser.interface.js';
-import { PlatformImporter } from '../common/interfaces/importer.interface.js';
-import { ChatgptParser } from './chatgpt/chatgpt.parser.js';
-import { GeminiParser } from './gemini/gemini.parser.js';
-import { ClaudeParser } from './claude/claude.parser.js';
-import { DeepseekParser } from './deepseek/deepseek.parser.js';
+import {
+  PlatformImporter,
+  JsonFileEntry,
+} from '../common/interfaces/importer.interface.js';
 import { ChatgptImporter } from './chatgpt/chatgpt.importer.js';
 import { GeminiImporter } from './gemini/gemini.importer.js';
 import { ClaudeImporter } from './claude/claude.importer.js';
@@ -23,32 +22,22 @@ import {
   buildFuzzyFileMap,
   findFile,
   findFileByBasename,
+  FuzzyFileMap,
 } from './utils/zip-utils.js';
 
 @Injectable()
 export class ConversationService {
   private readonly logger = new Logger(ConversationService.name);
-  private readonly parsers: Record<AiPlatform, ConversationParser>;
   private readonly importers: Record<AiPlatform, PlatformImporter>;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly attachmentStorage: AttachmentStorageService,
-    chatgptParser: ChatgptParser,
-    geminiParser: GeminiParser,
-    claudeParser: ClaudeParser,
-    deepseekParser: DeepseekParser,
     chatgptImporter: ChatgptImporter,
     geminiImporter: GeminiImporter,
     claudeImporter: ClaudeImporter,
     deepseekImporter: DeepseekImporter,
   ) {
-    this.parsers = {
-      chatgpt: chatgptParser,
-      gemini: geminiParser,
-      claude: claudeParser,
-      deepseek: deepseekParser,
-    };
     this.importers = {
       chatgpt: chatgptImporter,
       gemini: geminiImporter,
@@ -188,51 +177,111 @@ export class ConversationService {
     rawFileContent: string,
     syncDelete = false,
   ) {
-    const parser = this.parsers[platform];
-    if (!parser) {
+    const tmpDir = fs.mkdtempSync('ai-import-');
+    const tmpFile = path.join(tmpDir, 'conversations.json');
+    try {
+      fs.writeFileSync(tmpFile, rawFileContent, 'utf-8');
+
+      const jsonFiles: JsonFileEntry[] = [
+        { entryPath: 'conversations.json', absolutePath: tmpFile },
+      ];
+
+      if (platform === 'gemini') {
+        return this.importGeminiStreamed(jsonFiles, undefined, syncDelete);
+      }
+
+      return this.importStreamed(platform, jsonFiles, undefined, syncDelete);
+    } finally {
+      try {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      } catch {
+        // ignore cleanup errors
+      }
+    }
+  }
+
+  private async importStreamed(
+    platform: AiPlatform,
+    jsonFiles: JsonFileEntry[],
+    attachmentLookup: FuzzyFileMap | undefined,
+    syncDelete: boolean,
+  ) {
+    const importer = this.importers[platform];
+    if (!importer) {
       throw new BadRequestException(`Unsupported platform: ${platform}`);
     }
 
-    if (
-      platform === 'deepseek' &&
-      'parseStream' in parser &&
-      typeof parser.parseStream === 'function'
-    ) {
-      return this.importFromFileStreamed(
-        platform,
-        parser as DeepseekParser,
-        rawFileContent,
-        syncDelete,
-      );
-    }
-
-    const conversations = parser.parse(rawFileContent);
-    for (const conversation of conversations) {
-      await this.upsertConversation(conversation);
-    }
-
-    let deleted = 0;
-    if (syncDelete) {
-      const importedIds = new Set(conversations.map((c) => c.id));
-      deleted = await this.syncDeleteMissing(platform, importedIds);
-    }
-
-    return { imported: conversations.length, deleted };
-  }
-
-  private async importFromFileStreamed(
-    platform: AiPlatform,
-    parser: DeepseekParser,
-    rawFileContent: string,
-    syncDelete: boolean,
-  ) {
     let imported = 0;
     const importedIds = new Set<string>();
 
-    for (const conversation of parser.parseStream(rawFileContent)) {
-      await this.upsertConversation(conversation);
+    for await (const parsed of importer.parseZipEntries(jsonFiles)) {
+      const { conversation, zipDir, skipAttachmentFiles } = parsed;
+      const insertedIds = new Set(await this.upsertConversation(conversation));
       imported++;
       importedIds.add(conversation.id);
+
+      if (insertedIds.size === 0 || skipAttachmentFiles || !attachmentLookup)
+        continue;
+
+      const { fuzzyEntryMap, consumed } = attachmentLookup;
+      for (const message of conversation.messages) {
+        if (!insertedIds.has(message.id)) continue;
+        if (!message.attachments?.length) continue;
+
+        for (const attachment of message.attachments) {
+          const primaryPath =
+            zipDir === '.' || zipDir === ''
+              ? attachment.storedName
+              : `${zipDir}/${attachment.storedName}`;
+          let match = findFile(fuzzyEntryMap, consumed, primaryPath);
+
+          if (!match) {
+            match = findFileByBasename(
+              fuzzyEntryMap,
+              consumed,
+              attachment.storedName,
+            );
+          }
+          if (!match) {
+            this.logger.warn(
+              `Attachment not found in zip [Chat ID: ${conversation.id}]: ${primaryPath}`,
+            );
+            continue;
+          }
+
+          try {
+            const attachmentData = fs.readFileSync(match.absolutePath);
+            const { storagePath, contentHash } =
+              await this.attachmentStorage.save(
+                attachmentData,
+                attachment.displayName,
+                conversation.platform,
+              );
+
+            await this.prisma.attachment.upsert({
+              where: {
+                messageId_contentHash: {
+                  messageId: message.id,
+                  contentHash,
+                },
+              },
+              create: {
+                messageId: message.id,
+                displayName: attachment.displayName,
+                storagePath,
+                contentHash,
+                size: attachmentData.length,
+              },
+              update: {},
+            });
+          } catch (err) {
+            this.logger.error(
+              `Failed to save attachment [${attachment.displayName}] for message ${message.id} in conversation ${conversation.id}`,
+              err,
+            );
+          }
+        }
+      }
     }
 
     let deleted = 0;
@@ -248,6 +297,10 @@ export class ConversationService {
     zipBuffer: Buffer,
     syncDelete = false,
   ) {
+    if (platform === 'gemini') {
+      return this.importFromZipGemini(zipBuffer, syncDelete);
+    }
+
     const importer = this.importers[platform];
     if (!importer) {
       throw new BadRequestException(`Unsupported platform: ${platform}`);
@@ -257,81 +310,15 @@ export class ConversationService {
       shouldExpandZip: importer.shouldExpandZip?.bind(importer),
       shouldParseJson: importer.shouldParseJson?.bind(importer),
     });
-    const { fuzzyEntryMap, consumed } = buildFuzzyFileMap(allFiles);
-
-    let imported = 0;
-    const importedIds = new Set<string>();
+    const attachmentLookup = buildFuzzyFileMap(allFiles);
 
     try {
-      for await (const parsed of importer.parseZipEntries(jsonFiles)) {
-        const { conversation, zipDir, skipAttachmentFiles } = parsed;
-        const insertedIds = new Set(
-          await this.upsertConversation(conversation),
-        );
-        imported++;
-        importedIds.add(conversation.id);
-
-        if (insertedIds.size === 0 || skipAttachmentFiles) continue;
-
-        for (const message of conversation.messages) {
-          if (!insertedIds.has(message.id)) continue;
-          if (!message.attachments?.length) continue;
-
-          for (const attachment of message.attachments) {
-            const primaryPath =
-              zipDir === '.' || zipDir === ''
-                ? attachment.storedName
-                : `${zipDir}/${attachment.storedName}`;
-            let match = findFile(fuzzyEntryMap, consumed, primaryPath);
-
-            if (!match) {
-              match = findFileByBasename(
-                fuzzyEntryMap,
-                consumed,
-                attachment.storedName,
-              );
-            }
-            if (!match) {
-              this.logger.warn(
-                `Attachment not found in zip [Chat ID: ${conversation.id}]: ${primaryPath}`,
-              );
-              continue;
-            }
-
-            try {
-              const attachmentData = fs.readFileSync(match.absolutePath);
-              const { storagePath, contentHash } =
-                await this.attachmentStorage.save(
-                  attachmentData,
-                  attachment.displayName,
-                  conversation.platform,
-                );
-
-              await this.prisma.attachment.upsert({
-                where: {
-                  messageId_contentHash: {
-                    messageId: message.id,
-                    contentHash,
-                  },
-                },
-                create: {
-                  messageId: message.id,
-                  displayName: attachment.displayName,
-                  storagePath,
-                  contentHash,
-                  size: attachmentData.length,
-                },
-                update: {},
-              });
-            } catch (err) {
-              this.logger.error(
-                `Failed to save attachment [${attachment.displayName}] for message ${message.id} in conversation ${conversation.id}`,
-                err,
-              );
-            }
-          }
-        }
-      }
+      return await this.importStreamed(
+        platform,
+        jsonFiles,
+        attachmentLookup,
+        syncDelete,
+      );
     } finally {
       try {
         fs.rmSync(tempDir, { recursive: true, force: true });
@@ -339,13 +326,6 @@ export class ConversationService {
         // ignore cleanup errors
       }
     }
-
-    let deleted = 0;
-    if (syncDelete) {
-      deleted = await this.syncDeleteMissing(platform, importedIds);
-    }
-
-    return { imported, deleted };
   }
 
   async importFromZipGemini(zipBuffer: Buffer, syncDelete = false) {
@@ -354,7 +334,29 @@ export class ConversationService {
       shouldExpandZip: geminiImporter.shouldExpandZip?.bind(geminiImporter),
       shouldParseJson: geminiImporter.shouldParseJson?.bind(geminiImporter),
     });
-    const { fuzzyEntryMap, consumed } = buildFuzzyFileMap(allFiles);
+    const attachmentLookup = buildFuzzyFileMap(allFiles);
+
+    try {
+      return await this.importGeminiStreamed(
+        jsonFiles,
+        attachmentLookup,
+        syncDelete,
+      );
+    } finally {
+      try {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      } catch {
+        // ignore cleanup errors
+      }
+    }
+  }
+
+  private async importGeminiStreamed(
+    jsonFiles: JsonFileEntry[],
+    attachmentLookup: FuzzyFileMap | undefined,
+    syncDelete = false,
+  ) {
+    const geminiImporter = this.importers['gemini'] as GeminiImporter;
 
     interface ConversationMeta {
       title: string;
@@ -363,7 +365,6 @@ export class ConversationService {
       createdAt: string;
       dbExists: boolean;
       dbUpdatedAt: number;
-      insertedMessageIds: Set<string>;
     }
 
     const conversationMap = new Map<string, ConversationMeta>();
@@ -375,103 +376,100 @@ export class ConversationService {
     let imported = 0;
     const importedIds = new Set<string>();
 
-    try {
-      await this.prisma.$transaction(
-        async (tx) => {
-          for await (const { result } of geminiImporter.parseZipEntriesStreamed(
-            jsonFiles,
-          )) {
-            const { chatId, messages, recordTime, title } = result;
-            const recordTimeMs = new Date(recordTime).getTime();
+    await this.prisma.$transaction(
+      async (tx) => {
+        for await (const { result } of geminiImporter.parseZipEntriesStreamed(
+          jsonFiles,
+        )) {
+          const { chatId, messages, recordTime, title } = result;
+          const recordTimeMs = new Date(recordTime).getTime();
 
-            let meta = conversationMap.get(chatId);
-            if (!meta) {
-              const existing = await tx.conversation.findUnique({
-                where: { id: chatId },
-                select: { updatedAt: true, createdAt: true },
-              });
-
-              if (existing) {
-                meta = {
-                  title: '',
-                  titleTime: 0,
-                  updatedAt: existing.updatedAt.getTime(),
-                  createdAt: existing.createdAt.toISOString(),
-                  dbExists: true,
-                  dbUpdatedAt: existing.updatedAt.getTime(),
-                  insertedMessageIds: new Set(),
-                };
-              } else {
-                meta = {
-                  title,
-                  titleTime: recordTimeMs,
-                  updatedAt: recordTimeMs,
-                  createdAt: recordTime,
-                  dbExists: false,
-                  dbUpdatedAt: 0,
-                  insertedMessageIds: new Set(),
-                };
-              }
-              conversationMap.set(chatId, meta);
-            }
-
-            if (meta.dbExists && recordTimeMs <= meta.dbUpdatedAt) continue;
-
-            if (!meta.dbExists && recordTimeMs < meta.titleTime) {
-              meta.title = title;
-              meta.titleTime = recordTimeMs;
-            }
-
-            meta.updatedAt = Math.max(meta.updatedAt, recordTimeMs);
-            for (const message of messages) {
-              await tx.message.upsert({
-                where: { id: message.id },
-                create: {
-                  id: message.id,
-                  role: message.role,
-                  content: message.content,
-                  conversationId: chatId,
-                  createdAt: new Date(message.createdAt),
-                  hidden: false,
-                  parentMessageId: message.parentMessageId ?? null,
-                },
-                update: {},
-              });
-              meta.insertedMessageIds.add(message.id);
-
-              if (message.attachments?.length) {
-                for (const attachment of message.attachments) {
-                  pendingAttachments.push({
-                    messageId: message.id,
-                    chatId,
-                    attachment,
-                  });
-                }
-              }
-            }
-          }
-
-          for (const [chatId, meta] of conversationMap) {
-            await tx.conversation.upsert({
+          let meta = conversationMap.get(chatId);
+          if (!meta) {
+            const existing = await tx.conversation.findUnique({
               where: { id: chatId },
-              create: {
-                id: chatId,
-                platform: 'gemini',
-                title: meta.title,
-                createdAt: new Date(meta.createdAt),
-                updatedAt: new Date(meta.updatedAt),
-              },
-              update: {
-                updatedAt: new Date(meta.updatedAt),
-              },
+              select: { updatedAt: true, createdAt: true },
             });
-            imported++;
-            importedIds.add(chatId);
-          }
-        },
-        { timeout: 300_000 },
-      );
 
+            if (existing) {
+              meta = {
+                title: '',
+                titleTime: 0,
+                updatedAt: existing.updatedAt.getTime(),
+                createdAt: existing.createdAt.toISOString(),
+                dbExists: true,
+                dbUpdatedAt: existing.updatedAt.getTime(),
+              };
+            } else {
+              meta = {
+                title,
+                titleTime: recordTimeMs,
+                updatedAt: recordTimeMs,
+                createdAt: recordTime,
+                dbExists: false,
+                dbUpdatedAt: 0,
+              };
+            }
+            conversationMap.set(chatId, meta);
+          }
+
+          if (meta.dbExists && recordTimeMs <= meta.dbUpdatedAt) continue;
+
+          if (!meta.dbExists && recordTimeMs < meta.titleTime) {
+            meta.title = title;
+            meta.titleTime = recordTimeMs;
+          }
+
+          meta.updatedAt = Math.max(meta.updatedAt, recordTimeMs);
+          for (const message of messages) {
+            await tx.message.upsert({
+              where: { id: message.id },
+              create: {
+                id: message.id,
+                role: message.role,
+                content: message.content,
+                conversationId: chatId,
+                createdAt: new Date(message.createdAt),
+                hidden: false,
+                parentMessageId: message.parentMessageId ?? null,
+              },
+              update: {},
+            });
+            if (message.attachments?.length) {
+              for (const attachment of message.attachments) {
+                pendingAttachments.push({
+                  messageId: message.id,
+                  chatId,
+                  attachment,
+                });
+              }
+            }
+          }
+        }
+
+        for (const [chatId, meta] of conversationMap) {
+          await tx.conversation.upsert({
+            where: { id: chatId },
+            create: {
+              id: chatId,
+              platform: 'gemini',
+              title: meta.title,
+              createdAt: new Date(meta.createdAt),
+              updatedAt: new Date(meta.updatedAt),
+            },
+            update: {
+              updatedAt: new Date(meta.updatedAt),
+            },
+          });
+          imported++;
+          importedIds.add(chatId);
+        }
+      },
+      { timeout: 300_000 },
+    );
+
+    if (attachmentLookup) {
+      const { fuzzyEntryMap, consumed } = attachmentLookup;
       for (const { messageId, chatId, attachment } of pendingAttachments) {
         const primaryPath = attachment.storedName;
         let match = findFile(fuzzyEntryMap, consumed, primaryPath);
@@ -521,12 +519,6 @@ export class ConversationService {
             err,
           );
         }
-      }
-    } finally {
-      try {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-      } catch {
-        // ignore cleanup errors
       }
     }
 

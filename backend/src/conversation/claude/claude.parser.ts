@@ -40,6 +40,16 @@ export class ClaudeParser implements ConversationParser {
     return conversations;
   }
 
+  parseOne(itemJson: string): Conversation | null {
+    let raw: ClaudeConversation;
+    try {
+      raw = JSON.parse(itemJson) as ClaudeConversation;
+    } catch {
+      return null;
+    }
+    return this.toConversation(raw);
+  }
+
   private toConversation(raw: ClaudeConversation): Conversation | null {
     if (!raw.uuid) return null;
 
