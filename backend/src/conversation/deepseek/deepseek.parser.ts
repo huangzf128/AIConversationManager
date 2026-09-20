@@ -148,9 +148,7 @@ export class DeepseekParser implements ConversationParser {
 
     const createdAt =
       this.normalizeTimestamp(raw.inserted_at) ?? messages[0].createdAt;
-    const updatedAt =
-      this.normalizeTimestamp(raw.updated_at) ??
-      messages[messages.length - 1].createdAt;
+    const updatedAt = messages[messages.length - 1].createdAt;
 
     return {
       id: raw.id,
@@ -237,10 +235,11 @@ export class DeepseekParser implements ConversationParser {
   }
 
   private ensureChronologicalOrder(messages: ConversationMessage[]): void {
-    for (let i = 1; i < messages.length; i++) {
-      if (messages[i].createdAt < messages[i - 1].createdAt) {
-        messages[i].createdAt = messages[i - 1].createdAt;
-      }
+    if (messages.length === 0) return;
+
+    const base = new Date(messages[0].createdAt).getTime();
+    for (let i = 0; i < messages.length; i++) {
+      messages[i].createdAt = new Date(base + i).toISOString();
     }
   }
 

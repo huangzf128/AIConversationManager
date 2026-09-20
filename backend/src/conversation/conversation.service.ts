@@ -592,7 +592,12 @@ export class ConversationService {
     const toDeleteIds = dbIds
       .map((c) => c.id)
       .filter((id) => !importedIds.has(id));
-    if (toDeleteIds.length === 0) return 0;
+    if (toDeleteIds.length === 0) {
+      this.logger.log(
+        `Sync-deleted 0 conversation(s) for platform "${platform}"`,
+      );
+      return 0;
+    }
 
     const BATCH_SIZE = 900;
     let deleted = 0;
@@ -701,10 +706,13 @@ export class ConversationService {
       return [];
     }
 
-    const existingWatermark = existing.updatedAt.getTime();
-    const newMessages = uniqueMessages.filter(
-      (m) => new Date(m.createdAt).getTime() > existingWatermark,
-    );
+    const existingMessages = await this.prisma.message.findMany({
+      where: { conversationId: conversation.id },
+      select: { id: true },
+    });
+    const existingIdSet = new Set(existingMessages.map((m) => m.id));
+
+    const newMessages = uniqueMessages.filter((m) => !existingIdSet.has(m.id));
 
     await this.prisma.conversation.update({
       where: { id: conversation.id },

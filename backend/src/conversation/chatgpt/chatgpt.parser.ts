@@ -41,6 +41,7 @@ interface ChatGptMessage {
   author?: ChatGptAuthor;
   content?: ChatGptContent | null;
   create_time?: number | null;
+  update_time?: number | null;
   end_turn?: boolean | null;
   finish_details?: ChatGptFinishDetails | null;
   metadata?: {
@@ -199,7 +200,17 @@ export class ChatgptParser implements ConversationParser {
 
     flushAssistant();
 
+    this.ensureChronologicalOrder(messages);
     return messages;
+  }
+
+  private ensureChronologicalOrder(messages: ConversationMessage[]): void {
+    if (messages.length === 0) return;
+
+    const base = new Date(messages[0].createdAt).getTime();
+    for (let i = 0; i < messages.length; i++) {
+      messages[i].createdAt = new Date(base + i).toISOString();
+    }
   }
 
   private isAssistantReplyEnd(message: ChatGptMessage): boolean {
@@ -282,7 +293,9 @@ export class ChatgptParser implements ConversationParser {
     if (!text.trim() && attachments.length === 0) return null;
 
     const time =
-      this.toIsoString(message.create_time) ?? new Date(0).toISOString();
+      this.toIsoString(message.update_time) ??
+      this.toIsoString(message.create_time) ??
+      new Date(0).toISOString();
 
     return {
       id: `${conversationId}-${message.id}`,
