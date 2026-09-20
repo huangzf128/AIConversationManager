@@ -190,14 +190,12 @@ export class ClaudeParser implements ConversationParser {
 
     if (!text.trim() && attachments.length === 0) return null;
 
-    const content = text.trim() || this.attachmentPlaceholder(attachments);
-
     return {
       id:
         message.uuid ??
         `${conversationId}-${message.created_at ?? ''}-${message.sender}`,
       role: message.sender === 'human' ? 'user' : 'assistant',
-      content,
+      content: text.trim(),
       createdAt: message.created_at ?? new Date().toISOString(),
       attachments: attachments.length > 0 ? attachments : undefined,
     };
@@ -213,13 +211,6 @@ export class ClaudeParser implements ConversationParser {
         storedName: f.file_uuid ?? f.file_name ?? '',
         displayName: f.file_name || f.file_uuid || '',
       }));
-  }
-
-  private attachmentPlaceholder(attachments: ConversationAttachment[]): string {
-    const names = attachments
-      .map((a) => a.displayName || a.storedName)
-      .filter(Boolean);
-    return names.length > 0 ? `[Attached: ${names.join(', ')}]` : '';
   }
 
   private extractText(message: ClaudeChatMessage): string {

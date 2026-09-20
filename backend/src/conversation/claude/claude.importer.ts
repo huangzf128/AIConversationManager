@@ -29,7 +29,7 @@ export class ClaudeImporter implements PlatformImporter {
       for await (const itemJson of splitJsonArrayFile(absolutePath)) {
         const conversation = this.parser.parseOne(itemJson);
         if (!conversation) continue;
-        yield { conversation, zipDir: dir };
+        yield { conversation, zipDir: dir, skipAttachmentFiles: true };
       }
     }
   }

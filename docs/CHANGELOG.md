@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+* Claude parser now supports branching: walks the `parent_message_uuid`
+  tree via BFS to build `parentMessageId` chains, enabling branch
+  switchers in the UI. Falls back to linear sort for older exports
+  without `parent_message_uuid`.
+* Claude parser now extracts thinking content from `content[]` blocks
+  (`type: "thinking"`) and wraps it in `thinking` code fences, matching
+  the DeepSeek parser format.
+
+### Fixed
+
+* Claude import now creates Attachment DB records for files referenced in
+  `chat_messages[].files`. Previously attachments were silently skipped
+  because the zip lookup failed (Claude exports don't include file
+  content). Now `skipAttachmentFiles: true` is set, matching DeepSeek's
+  approach, so placeholder attachment records are created with
+  `size: 0`.
+* Claude parser no longer injects `[Attached: ...]` placeholder text into
+  `message.content` when a message has attachments but no text. The
+  attachment info is stored solely in the Attachment table.
+* Claude parser now preserves file-only messages (user sends a file with
+  no text). Previously these were silently dropped because `text` was
+  empty. Now the parser generates a placeholder content like
+  `[Attached: filename.txt]` and includes the attachment records.
+
 ### Changed
 
 * Gemini zip import now uses streaming: Takeout JSON records are parsed
