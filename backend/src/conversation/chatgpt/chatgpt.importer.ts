@@ -46,12 +46,17 @@ export class ChatgptImporter implements PlatformImporter {
       const byThread = libraryFilesByDir.get(dir);
 
       for await (const itemJson of splitJsonArrayFile(absolutePath)) {
-        const conversation = this.parser.parseOne(itemJson);
+        const conversation = this.parser.parseOneUnordered(itemJson);
         if (!conversation) continue;
 
         if (byThread) {
-          this.supplementDalleAttachments(conversation, byThread);
+          const parentLookup = this.parser.buildMessageParentLookup(itemJson);
+          this.supplementDalleAttachments(conversation, byThread, parentLookup);
         }
+
+        this.parser.ensureChronologicalOrder(conversation.messages);
+        conversation.updatedAt =
+          conversation.messages[conversation.messages.length - 1].createdAt;
         yield { conversation, zipDir: dir };
       }
     }
@@ -98,6 +103,7 @@ export class ChatgptImporter implements PlatformImporter {
   private supplementDalleAttachments(
     conv: Conversation,
     byThread: Map<string, LibraryFileEntry[]>,
+    parentLookup: Map<string, string>,
   ): void {
     const dalleFiles = byThread.get(conv.id);
     if (!dalleFiles?.length) return;
@@ -134,13 +140,7 @@ export class ChatgptImporter implements PlatformImporter {
         continue;
       }
 
-      let insertIdx = conv.messages.length;
-      for (let i = conv.messages.length - 1; i >= 0; i--) {
-        if (conv.messages[i].createdAt <= f.uploadTime) {
-          insertIdx = i + 1;
-          break;
-        }
-      }
+      let insertIdx = this.findDalleInsertIndex(conv, f, parentLookup);
 
       const dalleMsg: ConversationMessage = {
         id: `${conv.id}-dalle-${f.fileId}`,
@@ -158,5 +158,33 @@ export class ChatgptImporter implements PlatformImporter {
       const clamped = Math.min(index, conv.messages.length);
       conv.messages.splice(clamped, 0, msg);
     }
+  }
+
+  private findDalleInsertIndex(
+    conv: Conversation,
+    file: LibraryFileEntry,
+    parentLookup: Map<string, string>,
+  ): number {
+    if (file.messageId) {
+      const parentMsgId = parentLookup.get(file.messageId);
+      if (parentMsgId) {
+        const parentCompoundId = `${conv.id}-${parentMsgId}`;
+        const parentIdx = conv.messages.findIndex(
+          (m) => m.id === parentCompoundId,
+        );
+        if (parentIdx !== -1) {
+          return parentIdx + 1;
+        }
+      }
+    }
+
+    let insertIdx = conv.messages.length;
+    for (let i = conv.messages.length - 1; i >= 0; i--) {
+      if (conv.messages[i].createdAt <= file.uploadTime) {
+        insertIdx = i + 1;
+        break;
+      }
+    }
+    return insertIdx;
   }
 }
