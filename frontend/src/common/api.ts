@@ -1,6 +1,8 @@
 // Shared fetch helpers for talking to the NestJS backend.
 // Frontend utilities live under src/common, mirroring the backend convention.
-const API_BASE_URL = 'http://localhost:3000';
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string) || 'http://localhost:3000';
+
+export { API_BASE_URL };
 
 export async function fetchConversations() {
   const res = await fetch(`${API_BASE_URL}/conversations`);

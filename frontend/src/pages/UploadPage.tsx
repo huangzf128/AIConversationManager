@@ -1,7 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import './UploadPage.css';
 import { UploadIcon } from '../components/Icons';
+import { LoadingOverlay } from '../components/LoadingOverlay';
+import { API_BASE_URL } from '../common/api';
 
 type Platform = 'chatgpt' | 'gemini' | 'claude' | 'deepseek';
 
@@ -23,8 +25,19 @@ function UploadPage() {
   const [platform, setPlatform] = useState<Platform>('gemini');
   const [file, setFile] = useState<File | null>(null);
   const [syncDelete, setSyncDelete] = useState(false);
-  const [status, setStatus] = useState<{ type: 'info' | 'success' | 'error'; text: string } | null>(null);
+  const [status, setStatus] = useState<{ type: 'info' | 'success' | 'error'; text: string } | null>(
+    null,
+  );
   const [uploading, setUploading] = useState(false);
+
+  useEffect(() => {
+    if (!uploading) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [uploading]);
 
   const handleUpload = async () => {
     if (!file) return;
@@ -37,7 +50,7 @@ function UploadPage() {
     if (syncDelete) formData.append('syncDelete', 'true');
 
     try {
-      const res = await fetch('http://localhost:3000/conversations/upload', {
+      const res = await fetch(`${API_BASE_URL}/conversations/upload`, {
         method: 'POST',
         body: formData,
       });
@@ -65,13 +78,13 @@ function UploadPage() {
   return (
     <div className="upload-page">
       <header className="upload-header">
-        <Link to="/mypage" className="upload-back">
+        <Link to="/mypage" className="upload-back" onClick={(e) => uploading && e.preventDefault()}>
           &larr; Back to Archive
         </Link>
         <h1 className="upload-title">Import conversations</h1>
         <p className="upload-subtitle">
-          Upload an export for one platform. Re-importing updates existing conversations in place instead of
-          duplicating them, so manual hide/show choices are preserved.
+          Upload an export for one platform. Re-importing updates existing conversations in place
+          instead of duplicating them, so manual hide/show choices are preserved.
         </p>
       </header>
 
@@ -96,7 +109,9 @@ function UploadPage() {
 
         <label className={`upload-dropzone ${file ? 'upload-dropzone-has-file' : ''}`}>
           <UploadIcon />
-          <span className="upload-dropzone-main">{file ? file.name : 'Choose or drop your export (.json or .zip)'}</span>
+          <span className="upload-dropzone-main">
+            {file ? file.name : 'Choose or drop your export (.json or .zip)'}
+          </span>
           <span className="upload-dropzone-sub">
             {file ? `${(file.size / 1024).toFixed(1)} KB` : `Supported platform: ${platform}`}
           </span>
@@ -114,7 +129,10 @@ function UploadPage() {
             onChange={(e) => setSyncDelete(e.target.checked)}
           />
           <span>Sync delete</span>
-          <span className="upload-checkbox-hint">Remove conversations in DB that are no longer in the export (starred conversations are always kept)</span>
+          <span className="upload-checkbox-hint">
+            Remove conversations in DB that are no longer in the export (starred conversations are
+            always kept)
+          </span>
         </label>
 
         <div className="upload-actions">
@@ -125,6 +143,8 @@ function UploadPage() {
 
         {status && <p className={`upload-status upload-status-${status.type}`}>{status.text}</p>}
       </div>
+
+      {LoadingOverlay.builder().visible(uploading).text('Importing…').spinner(true).build()}
     </div>
   );
 }

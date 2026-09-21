@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Sidebar from '../components/Sidebar';
 import MainContent from '../components/MainContent';
+import { API_BASE_URL } from '../common/api';
 import './MyPage.css';
 
 export interface ConversationListItem {
@@ -37,7 +38,6 @@ export interface ConversationDetail {
   messages: MessageItem[];
 }
 
-const API_BASE = 'http://localhost:3000';
 const PAGE_SIZE = 20;
 
 function MyPage() {
@@ -59,7 +59,7 @@ function MyPage() {
   useEffect(() => {
     const params = new URLSearchParams({ take: String(PAGE_SIZE), skip: '0' });
     if (chatIdSearch) params.set('searchId', chatIdSearch);
-    fetch(`${API_BASE}/conversations?${params}`)
+    fetch(`${API_BASE_URL}/conversations?${params}`)
       .then((res) => res.json())
       .then((result: { data: ConversationListItem[]; hasMore: boolean }) => {
         setConversations(result.data);
@@ -77,7 +77,7 @@ function MyPage() {
     const skip = conversations.length;
     const params = new URLSearchParams({ take: String(PAGE_SIZE), skip: String(skip) });
     if (chatIdSearch) params.set('searchId', chatIdSearch);
-    fetch(`${API_BASE}/conversations?${params}`)
+    fetch(`${API_BASE_URL}/conversations?${params}`)
       .then((res) => res.json())
       .then((result: { data: ConversationListItem[]; hasMore: boolean }) => {
         setConversations((prev) => [...prev, ...result.data]);
@@ -92,7 +92,7 @@ function MyPage() {
   // since `selected` below is derived rather than stored separately.
   useEffect(() => {
     if (!selectedId || detailsCache[selectedId]) return;
-    fetch(`${API_BASE}/conversations/${selectedId}`)
+    fetch(`${API_BASE_URL}/conversations/${selectedId}`)
       .then((res) => res.json())
       .then((detail: ConversationDetail) => {
         setDetailsCache((prev) => ({ ...prev, [selectedId]: detail }));
@@ -133,7 +133,7 @@ function MyPage() {
     setConversations((prev) => prev.map((c) => (c.id === id ? { ...c, hidden } : c)));
     setDetailsCache((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id], hidden } } : prev));
 
-    fetch(`${API_BASE}/conversations/${id}/hidden`, {
+    fetch(`${API_BASE_URL}/conversations/${id}/hidden`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ hidden }),
@@ -148,7 +148,7 @@ function MyPage() {
   const handleToggleStarred = (id: string, starred: boolean) => {
     setConversations((prev) => prev.map((c) => (c.id === id ? { ...c, starred } : c)));
 
-    fetch(`${API_BASE}/conversations/${id}/starred`, {
+    fetch(`${API_BASE_URL}/conversations/${id}/starred`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ starred }),
@@ -172,7 +172,7 @@ function MyPage() {
       };
     });
 
-    fetch(`${API_BASE}/conversations/${selectedId}/messages/${messageId}/hidden`, {
+    fetch(`${API_BASE_URL}/conversations/${selectedId}/messages/${messageId}/hidden`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ hidden }),
