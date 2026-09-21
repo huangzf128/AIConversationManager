@@ -104,10 +104,35 @@ use, memory reads, etc.:
 
 The parser strips these (both fenced and bare forms) before storing.
 
+## Deleted Conversations
+
+When a conversation is deleted in Claude, the export may still contain a
+**shell entry** — an object with only `uuid` and no `name`, `chat_messages`,
+or timestamps. These are remnants of deleted conversations and carry no
+useful content.
+
+The parser skips these by checking `name`:
+- If `name` is empty or missing → conversation is skipped (returns `null`)
+
+This filter is applied **before** the message tree walk, so deleted
+conversations are discarded early without any processing overhead.
+
+## Empty Messages
+
+Claude's message tree may contain **empty nodes** — messages where both
+`text` is `""` and `content` is `[]`, with no attachments. These are
+internal tree structure placeholders (e.g. abandoned regenerations).
+
+The parser skips these in `toMessage()`:
+- If `text` is blank **and** there are no attachments → message is
+  skipped (returns `null`)
+
 ## Parsing Steps
 
 1. Parse the JSON array
 2. For each conversation:
+   - Skip if `uuid` is missing (cannot match across re-imports)
+   - Skip if `name` is empty or missing (deleted conversation shell)
    - If `parent_message_uuid` is present: walk the message tree via BFS
      from the root sentinel, building `parentMessageId` chains for
      branching support
@@ -116,4 +141,4 @@ The parser strips these (both fenced and bare forms) before storing.
    - Extract thinking content from `content[]` blocks
    - Parse `files[]` as attachments; preserve file-only messages
    - Strip unsupported blocks
-3. Skip conversations without a `uuid` (cannot match across re-imports)
+   - Skip messages with no text and no attachments (empty tree nodes)

@@ -70,6 +70,7 @@ export class ClaudeParser implements ConversationParser {
 
   private toConversation(raw: ClaudeConversation): Conversation | null {
     if (!raw.uuid) return null;
+    if (!raw.name?.trim()) return null;
 
     const messages = this.walkTree(raw);
     if (messages.length === 0) return null;
