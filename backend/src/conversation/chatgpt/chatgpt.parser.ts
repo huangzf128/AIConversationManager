@@ -120,12 +120,66 @@ export class ChatgptParser implements ConversationParser {
     }
   }
 
-  private toConversation(raw: ChatGptConversation): Conversation | null {
+  parseOneUnordered(itemJson: string): Conversation | null {
+    let raw: ChatGptConversation;
+    try {
+      raw = JSON.parse(itemJson) as ChatGptConversation;
+    } catch {
+      return null;
+    }
+    try {
+      return this.toConversation(raw, true);
+    } catch {
+      return null;
+    }
+  }
+
+  buildMessageParentLookup(itemJson: string): Map<string, string> {
+    let raw: ChatGptConversation;
+    try {
+      raw = JSON.parse(itemJson) as ChatGptConversation;
+    } catch {
+      return new Map();
+    }
+    const mapping = raw.mapping;
+    if (!mapping) return new Map();
+
+    const lookup = new Map<string, string>();
+    for (const node of Object.values(mapping)) {
+      const msgId = node.message?.id;
+      const parentId = node.parent;
+      if (!msgId || !parentId) continue;
+      const parentNode = mapping[parentId];
+      const parentMsgId = parentNode?.message?.id;
+      if (parentMsgId) {
+        lookup.set(msgId, parentMsgId);
+      }
+    }
+    return lookup;
+  }
+
+  ensureChronologicalOrder(messages: ConversationMessage[]): void {
+    if (messages.length === 0) return;
+
+    const base = new Date(messages[0].createdAt).getTime();
+    for (let i = 0; i < messages.length; i++) {
+      messages[i].createdAt = new Date(base + i).toISOString();
+    }
+  }
+
+  private toConversation(
+    raw: ChatGptConversation,
+    skipOrdering = false,
+  ): Conversation | null {
     const id = raw.id ?? raw.conversation_id;
     if (!id) return null;
 
     const messages = this.walkTree(raw, id);
     if (messages.length === 0) return null;
+
+    if (!skipOrdering) {
+      this.ensureChronologicalOrder(messages);
+    }
 
     const createdAt =
       this.toIsoString(raw.create_time) ?? messages[0].createdAt;
@@ -200,17 +254,7 @@ export class ChatgptParser implements ConversationParser {
 
     flushAssistant();
 
-    this.ensureChronologicalOrder(messages);
     return messages;
-  }
-
-  private ensureChronologicalOrder(messages: ConversationMessage[]): void {
-    if (messages.length === 0) return;
-
-    const base = new Date(messages[0].createdAt).getTime();
-    for (let i = 0; i < messages.length; i++) {
-      messages[i].createdAt = new Date(base + i).toISOString();
-    }
   }
 
   private isAssistantReplyEnd(message: ChatGptMessage): boolean {

@@ -226,8 +226,17 @@ The supplementation logic (`supplementDalleAttachments` in
    - If `origination_message_id` matches an existing message → attach
      the file there (and set content to `[图片]` if empty)
    - Otherwise → **insert a new assistant message** with content
-     `[图片]` at the correct position (determined by `file_upload_time`)
+     `[图片]` at the correct position:
+     1. Look up `origination_message_id` in the raw mapping to find its
+        parent message (the user message that triggered DALL-E), then
+        insert after that parent message
+     2. Fall back to time-based insertion using `file_upload_time` if
+        the parent message cannot be resolved from the mapping
 5. Insertions are applied in reverse index order to preserve positions
+
+Note: chronological ordering (`ensureChronologicalOrder`) is applied
+**after** DALL-E supplementation so that the insertion logic can use
+original timestamps for accurate positioning.
 
 ## Message ID Scheme
 
