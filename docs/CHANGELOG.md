@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+* ChatGPT parser now supports branching: traverses the `mapping` tree
+  via BFS (instead of walking only the `current_node` path) and builds
+  `parentMessageId` chains, enabling branch switchers in the UI. All
+  edit/regenerate branches are now imported, not just the selected one.
 * Claude parser now supports branching: walks the `parent_message_uuid`
   tree via BFS to build `parentMessageId` chains, enabling branch
   switchers in the UI. Falls back to linear sort for older exports

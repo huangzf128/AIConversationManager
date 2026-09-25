@@ -96,17 +96,22 @@ regenerate branches:
 ## Message Tree Traversal
 
 ChatGPT stores messages as a tree to support edit and regenerate. The
-parser reconstructs the currently selected branch by:
+parser traverses **all branches** using BFS and builds `parentMessageId`
+chains so the frontend can render branch switchers:
 
-1. Starting from `current_node`, walk up via `parent` to the root
-2. Reverse to get root → leaf path
-3. Walk the path, converting each node to a `ConversationMessage`
+1. Find the root node (`parent == null`)
+2. BFS from root, visiting every node (including all branches)
+3. For each node, set `parentMessageId` to the last message id produced
+   by the parent node — when a node has multiple children, they all
+   share the same `parentMessageId`, creating a branch point
 
-### Branch Selection
+### Branch Handling
 
 When a user edits a message, the original and edited messages share the
-same parent but have different node ids. The tree walk follows
-`current_node`'s path, so only the selected branch is imported.
+same parent but have different node ids. The BFS traversal visits all
+children, so **all branches are imported** (not just the selected one).
+The frontend detects branches by checking whether any `parentMessageId`
+has multiple children and renders a branch switcher (◀ 1/2 ▶).
 
 ### Assistant Reply Merging
 

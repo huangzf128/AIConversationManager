@@ -202,59 +202,126 @@ export class ChatgptParser implements ConversationParser {
     const mapping = raw.mapping;
     if (!mapping) return [];
 
-    const path = this.resolvePath(mapping, raw.current_node);
+    const root = this.findRoot(mapping);
+    if (!root) return [];
 
+    const allNodeIds = this.bfsAllNodes(mapping, root);
+
+    const nodeLastMessageId = new Map<string, string>();
+    const nodePendingAssistant = new Map<string, ConversationMessage>();
     const messages: ConversationMessage[] = [];
-    let assistantBuffer: ConversationMessage | null = null;
 
-    const flushAssistant = () => {
-      if (assistantBuffer) {
-        messages.push(assistantBuffer);
-        assistantBuffer = null;
-      }
-    };
-
-    for (const nodeId of path) {
+    for (const nodeId of allNodeIds) {
       const node = mapping[nodeId];
-      if (!node?.message) continue;
+      if (!node) continue;
+
+      const parentNodeId = node.parent ?? undefined;
+
+      if (!node.message) {
+        const parentLastId = parentNodeId
+          ? nodeLastMessageId.get(parentNodeId)
+          : undefined;
+        if (parentLastId) nodeLastMessageId.set(nodeId, parentLastId);
+        continue;
+      }
 
       const role = this.mapRole(node.message.author?.role);
 
       if (role === 'assistant') {
-        const msg = this.toMessage(conversationId, node.message);
+        const pendingParent = parentNodeId
+          ? nodePendingAssistant.get(parentNodeId)
+          : null;
+        const parentLastId = parentNodeId
+          ? nodeLastMessageId.get(parentNodeId)
+          : undefined;
 
-        if (msg) {
-          if (assistantBuffer) {
-            const merged = [assistantBuffer.content, msg.content]
-              .filter((s) => s && s.trim())
-              .join('\n\n');
-            assistantBuffer.content = merged;
-            if (msg.attachments?.length) {
-              assistantBuffer.attachments = [
-                ...(assistantBuffer.attachments ?? []),
-                ...msg.attachments,
-              ];
-            }
-            assistantBuffer.id = msg.id;
-          } else {
-            assistantBuffer = msg;
+        const msg = this.toMessage(conversationId, node.message);
+        if (!msg) {
+          if (parentLastId) nodeLastMessageId.set(nodeId, parentLastId);
+          continue;
+        }
+
+        if (pendingParent) {
+          const merged = [pendingParent.content, msg.content]
+            .filter((s) => s && s.trim())
+            .join('\n\n');
+          pendingParent.content = merged;
+          if (msg.attachments?.length) {
+            pendingParent.attachments = [
+              ...(pendingParent.attachments ?? []),
+              ...msg.attachments,
+            ];
           }
+          pendingParent.id = msg.id;
+          if (parentNodeId) nodePendingAssistant.delete(parentNodeId);
         }
 
         if (this.isAssistantReplyEnd(node.message)) {
-          flushAssistant();
+          const finalMsg = pendingParent ?? msg;
+          if (!pendingParent) {
+            finalMsg.parentMessageId = parentLastId;
+          }
+          messages.push(finalMsg);
+          nodeLastMessageId.set(nodeId, finalMsg.id);
+        } else {
+          const bufferMsg = pendingParent ?? msg;
+          if (!pendingParent) {
+            bufferMsg.parentMessageId = parentLastId;
+          }
+          nodePendingAssistant.set(nodeId, bufferMsg);
         }
         continue;
       }
 
-      flushAssistant();
+      if (parentNodeId && nodePendingAssistant.has(parentNodeId)) {
+        const pending = nodePendingAssistant.get(parentNodeId)!;
+        messages.push(pending);
+        nodeLastMessageId.set(parentNodeId, pending.id);
+        nodePendingAssistant.delete(parentNodeId);
+      }
+
+      const parentLastId = parentNodeId
+        ? nodeLastMessageId.get(parentNodeId)
+        : undefined;
+
       const msg = this.toMessage(conversationId, node.message);
-      if (msg) messages.push(msg);
+      if (msg) {
+        msg.parentMessageId = parentLastId;
+        messages.push(msg);
+        nodeLastMessageId.set(nodeId, msg.id);
+      } else {
+        if (parentLastId) nodeLastMessageId.set(nodeId, parentLastId);
+      }
     }
 
-    flushAssistant();
+    for (const [, pending] of nodePendingAssistant) {
+      messages.push(pending);
+    }
 
     return messages;
+  }
+
+  private bfsAllNodes(
+    mapping: Record<string, ChatGptMappingNode>,
+    root: string,
+  ): string[] {
+    const order: string[] = [];
+    const visited = new Set<string>();
+    const queue: string[] = [root];
+    let head = 0;
+
+    while (head < queue.length) {
+      const nodeId = queue[head++];
+      if (visited.has(nodeId)) continue;
+      visited.add(nodeId);
+      order.push(nodeId);
+
+      for (const childId of mapping[nodeId]?.children ?? []) {
+        if (!visited.has(childId)) queue.push(childId);
+      }
+    }
+
+    return order;
   }
 
   private isAssistantReplyEnd(message: ChatGptMessage): boolean {
@@ -265,49 +332,6 @@ export class ChatgptParser implements ConversationParser {
     if (tokens.includes(STOP_TOKEN_NORMAL_END)) return true;
     if (tokens.includes(STOP_TOKEN_TOOL_CALL)) return false;
     return true;
-  }
-
-  private resolvePath(
-    mapping: Record<string, ChatGptMappingNode>,
-    currentNode: string | null | undefined,
-  ): string[] {
-    if (currentNode && mapping[currentNode]) {
-      const path: string[] = [];
-      const visited = new Set<string>();
-      let nodeId: string | null | undefined = currentNode;
-      while (nodeId && mapping[nodeId] && !visited.has(nodeId)) {
-        visited.add(nodeId);
-        path.unshift(nodeId);
-        nodeId = mapping[nodeId].parent;
-      }
-      if (path.length > 0 && mapping[path[0]]?.parent == null) {
-        return path;
-      }
-    }
-
-    const root = this.findRoot(mapping);
-    if (root) {
-      const path: string[] = [];
-      const visited = new Set<string>();
-      let nodeId: string | null | undefined = root;
-      while (nodeId && mapping[nodeId] && !visited.has(nodeId)) {
-        visited.add(nodeId);
-        path.push(nodeId);
-        const children: string[] = mapping[nodeId].children ?? [];
-        nodeId = children.length > 0 ? children[children.length - 1] : null;
-      }
-      if (path.length > 0) return path;
-    }
-
-    return Object.values(mapping)
-      .filter((n) => n.message && this.toIsoString(n.message.create_time))
-      .sort(
-        (a, b) =>
-          new Date(this.toIsoString(a.message!.create_time)!).getTime() -
-          new Date(this.toIsoString(b.message!.create_time)!).getTime(),
-      )
-      .map((n) => n.id!)
-      .filter(Boolean);
   }
 
   private findRoot(mapping: Record<string, ChatGptMappingNode>): string | null {
